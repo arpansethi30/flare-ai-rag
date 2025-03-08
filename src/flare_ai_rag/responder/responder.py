@@ -29,13 +29,44 @@ class GeminiResponder(BaseResponder):
         """
         context = "List of retrieved documents:\n"
 
-        # Build context from the retrieved documents.
+        # Build enhanced context from the retrieved documents with better source information
         for idx, doc in enumerate(retrieved_documents, start=1):
-            identifier = doc.get("metadata", {}).get("filename", f"Doc{idx}")
-            context += f"Document {identifier}:\n{doc.get('text', '')}\n\n"
+            # Extract all available metadata for better source attribution
+            metadata = doc.get("metadata", {})
+            identifier = metadata.get("filename", f"Doc{idx}")
+            url = metadata.get("url", "")
+            title = metadata.get("title", "")
+            author = metadata.get("author", "")
+            date = metadata.get("date", "")
+            
+            # Create a structured source reference
+            source_info = f"Document {idx} [Source: {identifier}]"
+            if title:
+                source_info += f" - {title}"
+            if author:
+                source_info += f" by {author}"
+            if date:
+                source_info += f" ({date})"
+            if url:
+                source_info += f" URL: {url}"
+                
+            context += f"{source_info}:\n{doc.get('text', '')}\n\n"
 
-        # Compose the prompt
-        prompt = context + f"User query: {query}\n" + self.responder_config.query_prompt
+        # Add citation instructions to the prompt
+        citation_instructions = """
+When answering, please cite your sources using the document numbers provided (e.g., [Doc1], [Doc2]).
+Each claim or piece of information should be attributed to its specific source.
+If information comes from multiple sources, cite all relevant documents.
+If you're unsure about any information or it's not in the provided documents, clearly state this.
+"""
+
+        # Compose the enhanced prompt with citation instructions
+        prompt = (
+            context + 
+            citation_instructions + 
+            f"\nUser query: {query}\n" + 
+            self.responder_config.query_prompt
+        )
 
         # Use the generate method of GeminiProvider to obtain a response.
         response = self.client.generate(
@@ -72,13 +103,45 @@ class OpenRouterResponder(BaseResponder):
         """
         context = "List of retrieved documents:\n"
 
-        # Build context from the retrieved documents.
+        # Build enhanced context from the retrieved documents with better source information
         for idx, doc in enumerate(retrieved_documents, start=1):
-            identifier = doc.get("metadata", {}).get("filename", f"Doc{idx}")
-            context += f"Document {identifier}:\n{doc.get('text', '')}\n\n"
+            # Extract all available metadata for better source attribution
+            metadata = doc.get("metadata", {})
+            identifier = metadata.get("filename", f"Doc{idx}")
+            url = metadata.get("url", "")
+            title = metadata.get("title", "")
+            author = metadata.get("author", "")
+            date = metadata.get("date", "")
+            
+            # Create a structured source reference
+            source_info = f"Document {idx} [Source: {identifier}]"
+            if title:
+                source_info += f" - {title}"
+            if author:
+                source_info += f" by {author}"
+            if date:
+                source_info += f" ({date})"
+            if url:
+                source_info += f" URL: {url}"
+                
+            context += f"{source_info}:\n{doc.get('text', '')}\n\n"
 
-        # Compose the prompt
-        prompt = context + f"User query: {query}\n" + self.responder_config.query_prompt
+        # Add citation instructions to the prompt
+        citation_instructions = """
+When answering, please cite your sources using the document numbers provided (e.g., [Doc1], [Doc2]).
+Each claim or piece of information should be attributed to its specific source.
+If information comes from multiple sources, cite all relevant documents.
+If you're unsure about any information or it's not in the provided documents, clearly state this.
+"""
+
+        # Compose the enhanced prompt with citation instructions
+        prompt = (
+            context + 
+            citation_instructions + 
+            f"\nUser query: {query}\n" + 
+            self.responder_config.query_prompt
+        )
+        
         # Prepare the payload for the completion endpoint.
         payload: dict[str, Any] = {
             "model": self.responder_config.model.model_id,

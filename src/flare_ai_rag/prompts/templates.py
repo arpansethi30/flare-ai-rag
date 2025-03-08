@@ -11,7 +11,6 @@ Categories (in order of precedence):
    • Keywords: blockchain, Flare, oracle, crypto, smart contract, staking, consensus,
    gas, node
 
-
 2. REQUEST_ATTESTATION
    • Keywords: attestation, verify, prove, check enclave
    • Must specifically request verification or attestation
