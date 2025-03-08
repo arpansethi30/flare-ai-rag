@@ -12,3 +12,30 @@ wheels/
 .ruff_cache
 .vscode
 .DS_Store
+
+# Qdrant storage and logs
+storage/
+*.log
+logs/
+
+# IDE files
+.idea/
+*.swp
+*.swo
+.vscode/
+*.sublime-workspace
+*.sublime-project
+
+# Environment files
+.env*
+!.env.example
+
+# Temporary files
+*.tmp
+*.temp
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Docker volumes
+docker-volumes/
