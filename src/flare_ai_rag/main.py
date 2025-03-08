@@ -6,6 +6,7 @@ It sets up CORS middleware, loads configuration and data, and wires together the
 Gemini-based Router, Retriever, and Responder components into a chat endpoint.
 """
 
+import os
 import pandas as pd
 import structlog
 import uvicorn
@@ -160,11 +161,14 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
-def start() -> None:
+def start():
     """
     Start the FastAPI application server.
     """
-    uvicorn.run(app, host="0.0.0.0", port=8080)  # noqa: S104
+    # Get port from environment variable with fallback to 8080
+    port = int(os.environ.get("PORT", 8080))
+    logger.info(f"Starting server on port {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)  # noqa: S104
 
 
 if __name__ == "__main__":

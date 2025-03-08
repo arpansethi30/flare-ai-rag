@@ -37,8 +37,28 @@ def parse_gemini_response_as_json(raw_response: ModelResponse) -> dict[str, Any]
     Returns:
         dict: The parsed JSON content.
     """
-    text = raw_response.text
-    pattern = r"```json\s*(.*?)\s*```"
-    match = re.search(pattern, text, re.DOTALL)
-    json_str = match.group(1) if match else text
-    return json.loads(json_str)
+    try:
+        if not raw_response or not hasattr(raw_response, 'text') or not raw_response.text:
+            return {"classification": "ANSWER"}  # Default fallback for empty responses
+
+        text = raw_response.text.strip()
+        
+        # Try to find JSON in code blocks
+        pattern = r"```json\s*(.*?)\s*```"
+        match = re.search(pattern, text, re.DOTALL)
+        json_str = match.group(1) if match else text
+        
+        # Clean up the string before parsing
+        json_str = json_str.strip()
+        
+        # Handle potential JSON formatting issues
+        if not json_str:
+            return {"classification": "ANSWER"}
+            
+        return json.loads(json_str)
+    except (json.JSONDecodeError, AttributeError, Exception) as e:
+        import structlog
+        logger = structlog.get_logger(__name__)
+        logger.error(f"Failed to parse Gemini response: {e}")
+        logger.debug(f"Raw response text: {raw_response.text if hasattr(raw_response, 'text') else 'None'}")
+        return {"classification": "ANSWER"}  # Default fallback
