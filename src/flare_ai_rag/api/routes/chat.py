@@ -118,7 +118,30 @@ class ChatRouter:
             route_response = self.ai.generate(
                 prompt=prompt, response_mime_type=mime_type, response_schema=schema
             )
-            return SemanticRouterResponse(route_response.text)
+            
+            # Clean and normalize the response text
+            response_text = route_response.text.strip().replace('\n', '')
+            
+            # Try to match with enum values
+            for route in SemanticRouterResponse:
+                if route.name in response_text or route.value in response_text:
+                    return route
+                    
+            # If direct match not found, try case-insensitive matching
+            response_upper = response_text.upper()
+            for route in SemanticRouterResponse:
+                if route.name.upper() in response_upper or route.value.upper() in response_upper:
+                    return route
+            
+            # Default to RAG_ROUTER for questions about Flare
+            if "flare" in message.lower() or "blockchain" in message.lower():
+                self.logger.info("Defaulting to RAG_ROUTER for Flare-related question")
+                return SemanticRouterResponse.RAG_ROUTER
+                
+            # If all else fails, use conversational
+            self.logger.warning(f"Could not map '{response_text}' to a valid route, defaulting to CONVERSATIONAL")
+            return SemanticRouterResponse.CONVERSATIONAL
+            
         except Exception as e:
             self.logger.exception("routing_failed", error=str(e))
             return SemanticRouterResponse.CONVERSATIONAL

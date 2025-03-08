@@ -8,8 +8,8 @@ and message management while maintaining a consistent AI personality.
 
 from typing import Any, override
 
+import google.generativeai as genai
 import structlog
-from google.generativeai.client import configure
 from google.generativeai.embedding import (
     EmbeddingTaskType,
 )
@@ -20,9 +20,12 @@ from google.generativeai.generative_models import ChatSession, GenerativeModel
 from google.generativeai.types import GenerationConfig
 
 from flare_ai_rag.ai.base import BaseAIProvider, ModelResponse
+from flare_ai_rag.utils.text_utils import calculate_text_size
 
 logger = structlog.get_logger(__name__)
 
+# Maximum size for Gemini API requests in bytes
+MAX_CONTENT_SIZE = 8000  # Reduced from 10kb to ensure we stay under the limit
 
 SYSTEM_INSTRUCTION = """
 You are an AI assistant specialized in helping users navigate
@@ -48,66 +51,36 @@ class GeminiProvider(BaseAIProvider):
 
     Attributes:
         chat (generativeai.ChatSession | None): Active chat session
-        model (generativeai.GenerativeModel): Configured Gemini model instance
-        chat_history: History of chat interactions
-        logger (BoundLogger): Structured logger for the provider
     """
 
     def __init__(self, api_key: str, model: str, **kwargs: str) -> None:
-        """
-        Initialize the Gemini provider with API credentials and model configuration.
-
-        Args:
-            api_key (str): Google API key for authentication
-            model (str): Gemini model identifier to use
-            **kwargs (str): Additional configuration parameters including:
-                - system_instruction: Custom system prompt for the AI personality
-        """
-        configure(api_key=api_key)
-        self.chat: ChatSession | None = None
-        self.model = GenerativeModel(
-            model_name=model,
-            system_instruction=kwargs.get("system_instruction", SYSTEM_INSTRUCTION),
-        )
-        self.chat_history = []
-        self.logger = logger.bind(service="gemini")
+        """Initialize the Gemini provider."""
+        genai.configure(api_key=api_key)
+        # Strip the "models/" prefix if present since GenerativeModel doesn't expect it
+        model_name = model.replace("models/", "")
+        self.model = genai.GenerativeModel(model_name)
+        self.chat = None
+        self.system_instruction = kwargs.get("system_instruction", SYSTEM_INSTRUCTION)
+        self.api_key = api_key  # Required by the base class
+        self.model_id = model  # Keep track of the original model ID
+        self.chat_history = []  # Required by the base class
 
     @override
     def reset(self) -> None:
-        """
-        Reset the provider state.
-
-        Clears chat history and terminates active chat session.
-        """
-        self.chat_history = []
+        """Reset the chat session."""
         self.chat = None
-        self.logger.debug(
-            "reset_gemini", chat=self.chat, chat_history=self.chat_history
-        )
+        self.chat_history = []
 
     @override
     def reset_model(self, model: str, **kwargs: str) -> None:
-        """
-        Completely reinitialize the generative model with new parameters,
-        and reset the chat session and history.
-
-        Args:
-            model (str): New model identifier.
-            **kwargs: Additional configuration parameters, e.g.:
-                system_instruction: new system prompt.
-        """
-        new_system_instruction = kwargs.get("system_instruction", SYSTEM_INSTRUCTION)
-        # Reinitialize the generative model.
-        self.model = GenerativeModel(
-            model_name=model,
-            system_instruction=new_system_instruction,
-        )
-        # Reset chat session and history with the new system instruction.
+        """Reset the model configuration."""
+        # Strip the "models/" prefix if present since GenerativeModel doesn't expect it
+        model_name = model.replace("models/", "")
+        self.model = genai.GenerativeModel(model_name)
         self.chat = None
-        self.chat_history = [{"role": "system", "content": new_system_instruction}]
-        self.logger.debug(
-            "reset_model", model=model, system_instruction=new_system_instruction
-        )
+        self.model_id = model
+        self.system_instruction = kwargs.get("system_instruction", SYSTEM_INSTRUCTION)
+        self.chat_history = []
 
     @override
     def generate(
@@ -120,33 +93,34 @@ class GeminiProvider(BaseAIProvider):
         Generate content using the Gemini model.
 
         Args:
-            prompt (str): Input prompt for content generation
-            response_mime_type (str | None): Expected MIME type for the response
-            response_schema (Any | None): Schema defining the response structure
+            prompt (str): The input prompt
+            response_mime_type (str | None): Expected response MIME type
+            response_schema (Any | None): Expected response schema
 
         Returns:
-            ModelResponse: Generated content with metadata including:
-                - text: Generated text content
-                - raw_response: Complete Gemini response object
-                - metadata: Additional response information including:
-                    - candidate_count: Number of generated candidates
-                    - prompt_feedback: Feedback on the input prompt
+            ModelResponse: The generated response
         """
-        response = self.model.generate_content(
-            prompt,
-            generation_config=GenerationConfig(
-                response_mime_type=response_mime_type, response_schema=response_schema
-            ),
-        )
-        self.logger.debug("generate", prompt=prompt, response_text=response.text)
-        return ModelResponse(
-            text=response.text,
-            raw_response=response,
-            metadata={
-                "candidate_count": len(response.candidates),
-                "prompt_feedback": response.prompt_feedback,
-            },
-        )
+        try:
+            response = self.model.generate_content(
+                prompt,
+                generation_config=GenerationConfig(
+                    temperature=0.7,
+                    top_p=0.8,
+                    top_k=40,
+                    max_output_tokens=2048,
+                ),
+            )
+            return ModelResponse(
+                text=response.text,
+                raw_response=response,
+                metadata={
+                    "model": self.model_id,
+                    "prompt": prompt,
+                }
+            )
+        except Exception as e:
+            logger.exception("Error generating content", error=str(e))
+            raise
 
     @override
     def send_message(
@@ -154,69 +128,85 @@ class GeminiProvider(BaseAIProvider):
         msg: str,
     ) -> ModelResponse:
         """
-        Send a message in a chat session and get the response.
-
-        Initializes a new chat session if none exists, using the current chat history.
+        Send a message in the chat session.
 
         Args:
-            msg (str): Message to send to the chat session
+            msg (str): The message to send
 
         Returns:
-            ModelResponse: Response from the chat session including:
-                - text: Generated response text
-                - raw_response: Complete Gemini response object
-                - metadata: Additional response information including:
-                    - candidate_count: Number of generated candidates
-                    - prompt_feedback: Feedback on the input message
+            ModelResponse: The model's response
         """
-        if not self.chat:
-            self.chat = self.model.start_chat(history=self.chat_history)
-        response = self.chat.send_message(msg)
-        self.logger.debug("send_message", msg=msg, response_text=response.text)
-        return ModelResponse(
-            text=response.text,
-            raw_response=response,
-            metadata={
-                "candidate_count": len(response.candidates),
-                "prompt_feedback": response.prompt_feedback,
-            },
-        )
+        try:
+            if self.chat is None:
+                self.chat = self.model.start_chat(history=[])
+                if self.system_instruction:
+                    self.chat.send_message(self.system_instruction)
+
+            response = self.chat.send_message(msg)
+            
+            # Update chat history
+            self.chat_history.append({"role": "user", "content": msg})
+            self.chat_history.append({"role": "assistant", "content": response.text})
+            
+            return ModelResponse(
+                text=response.text,
+                raw_response=response,
+                metadata={
+                    "model": self.model_id,
+                    "chat_history": self.chat_history,
+                }
+            )
+        except Exception as e:
+            logger.exception("Error sending message", error=str(e))
+            raise
 
 
 class GeminiEmbedding:
-    def __init__(self, api_key: str) -> None:
-        """
-        Initialize Gemini with API credentials.
-        This client uses google.generativeai
+    """Client for generating embeddings using Gemini models."""
 
-        Args:
-            api_key (str): Google API key for authentication
-        """
-        configure(api_key=api_key)
+    def __init__(self, api_key: str) -> None:
+        """Initialize the embedding client."""
+        genai.configure(api_key=api_key)
 
     def embed_content(
         self,
         embedding_model: str,
         contents: str,
-        task_type: EmbeddingTaskType,
+        task_type: Any,
         title: str | None = None,
     ) -> list[float]:
         """
-        Generate text embeddings using Gemini.
+        Generate embeddings for the given content.
 
         Args:
-            model (str): The embedding model to use (e.g., "text-embedding-004").
-            contents (str): The text to be embedded.
+            embedding_model (str): The embedding model to use
+            contents (str): The content to embed
+            task_type (Any): The type of embedding task
+            title (str | None): Optional title for the content
 
         Returns:
-            list[float]: The generated embedding vector.
+            list[float]: The generated embedding vector
         """
-        response = _embed_content(
-            model=embedding_model, content=contents, task_type=task_type, title=title
-        )
+        # Check content size
+        content_size = calculate_text_size(contents)
+        if content_size > MAX_CONTENT_SIZE:
+            raise ValueError(f"Content size ({content_size} bytes) exceeds maximum allowed size ({MAX_CONTENT_SIZE} bytes)")
+            
         try:
-            embedding = response["embedding"]
-        except (KeyError, IndexError) as e:
-            msg = "Failed to extract embedding from response."
-            raise ValueError(msg) from e
-        return embedding
+            # Use the model name as provided (with 'models/' prefix)
+            # Gemini embed_content expects the full model path
+            response = genai.embed_content(
+                model=embedding_model,
+                content=contents,
+                task_type=task_type,
+                title=title,
+            )
+            
+            # Verify that we have an embedding in the response
+            if "embedding" not in response:
+                raise ValueError("Response does not contain an embedding")
+                
+            return response["embedding"]
+        except Exception as e:
+            logger.exception("Error generating embedding", error=str(e))
+            raise
