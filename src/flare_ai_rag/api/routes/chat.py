@@ -1,5 +1,5 @@
 import structlog
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from flare_ai_rag.ai import GeminiProvider
@@ -8,7 +8,6 @@ from flare_ai_rag.prompts import PromptService, SemanticRouterResponse
 from flare_ai_rag.responder import GeminiResponder
 from flare_ai_rag.retriever import QdrantRetriever
 from flare_ai_rag.router import GeminiRouter
-from flare_ai_rag.fallback_responses import FALLBACK_RESPONSES
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
@@ -232,6 +231,45 @@ class ChatRouter:
         """
         response = self.ai.send_message(message)
         return {"response": response.text}
+
+# Add these fallback responses as a dictionary
+FALLBACK_RESPONSES = {
+    "what is flare": """
+Flare is a blockchain for data, designed to provide decentralized access to high-integrity data from various sources. It's an EVM-compatible smart contract platform optimized for decentralized data acquisition, supporting:
+
+- Price and time-series data
+- Blockchain event and state data
+- Web2 API data integration
+
+Flare provides decentralized data protocols like the Flare Time Series Oracle (FTSO) for price feeds and the State Connector for cross-chain data validation. The network is secured by a Byzantine Fault Tolerant consensus mechanism.
+
+For more information, visit https://dev.flare.network/intro/
+""",
+    "what is ftso": """
+FTSO (Flare Time Series Oracle) is Flare's native price oracle system that provides reliable, decentralized price data to the network. Key features include:
+
+- Decentralized price feeds from multiple independent data providers
+- Economic incentives for accurate data provision
+- Resistance to manipulation through a robust voting system
+- Support for crypto assets, forex, commodities, and other assets
+
+FTSO data providers submit price estimates and are rewarded based on how close their estimates are to the weighted median of all submissions.
+
+For more information, visit https://dev.flare.network/tech/ftso/
+""",
+    "tell me about flare": """
+Flare is the blockchain for data ☀️, offering secure, decentralized access to high-integrity data from various sources. As an EVM-compatible platform, it enables developers to build scalable applications with access to:
+
+- Cross-chain data through the State Connector
+- Price feeds via the Flare Time Series Oracle (FTSO)
+- Time-series data for various assets
+- Integration with Web2 API data
+
+Flare's unique architecture addresses the oracle problem by providing native, decentralized data protocols that don't rely on centralized sources of truth.
+
+For more information, visit https://dev.flare.network/intro/
+"""
+}
 
 @router.post("/")
 async def chat(message: ChatMessage) -> dict:
