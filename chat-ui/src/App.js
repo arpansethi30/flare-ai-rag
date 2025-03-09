@@ -4,17 +4,9 @@ import ReactMarkdown from 'react-markdown';
 import './index.css';
 
 // Update to use the direct chat endpoint that has hardcoded responses
-// For local development, use localhost:8000
+// For local development with Docker, use port 8000
 // For production in Docker, use relative path
-const BACKEND_ROUTE = "http://localhost:8080/api/routes/chat/";
-
-// Rest of the file will be appended below
-
-// Rest of the file will be appended below
-
-// Rest of the file will be appended below
-
-// Rest of the file will be appended below
+const BACKEND_ROUTE = "http://localhost:8000/api/chat/";
 
 // Rest of the file will be appended below
 
@@ -61,23 +53,40 @@ const ChatInterface = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Origin': 'http://localhost:3000'
         },
         body: JSON.stringify({ message: text }),
       });
 
+      console.log('Response status:', response.status);
+      console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+
       if (!response.ok) {
-        throw new Error('Network response was not ok');
+        const errorText = await response.text();
+        console.error('Server error response:', errorText);
+        throw new Error(`Network response was not ok: ${response.status} ${errorText}`);
       }
 
-      const data = await response.json();
+      const responseText = await response.text();
+      console.log('Raw response text:', responseText);
+      
+      let data;
+      try {
+        data = JSON.parse(responseText);
+        console.log('Parsed response data:', data);
+      } catch (e) {
+        console.error('Error parsing JSON:', e);
+        throw new Error('Invalid JSON response from server');
+      }
 
       // Check if response contains a transaction preview
-      if (data.response.includes('Transaction Preview:')) {
+      if (data.answer && data.answer.includes('Transaction Preview:')) {
         setAwaitingConfirmation(true);
         setPendingTransaction(text);
       }
 
-      return data.response;
+      return data.answer || 'Sorry, there was an error processing your request. Please try again.';
     } catch (error) {
       console.error('Error:', error);
       return 'Sorry, there was an error processing your request. Please try again.';
