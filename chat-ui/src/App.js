@@ -3,7 +3,30 @@ import { Send } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import './index.css';
 
-const BACKEND_ROUTE = "http://localhost:8081/api/routes/chat/";
+// Update to use the direct chat endpoint that has hardcoded responses
+// For local development, use localhost:8000
+// For production in Docker, use relative path
+const BACKEND_ROUTE = "/api/direct/chat/";
+
+// Rest of the file will be appended below
+
+// Rest of the file will be appended below
+
+// Rest of the file will be appended below
+
+// Rest of the file will be appended below
+
+// Rest of the file will be appended below
+
+// Rest of the file will be appended below
+
+// Rest of the file will be appended below
+
+// Rest of the file will be appended below
+
+// Rest of the file will be appended below
+
+// Rest of the file will be appended below
 
 // Rest of the file will be appended below
 

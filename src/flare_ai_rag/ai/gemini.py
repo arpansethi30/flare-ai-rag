@@ -8,16 +8,10 @@ and message management while maintaining a consistent AI personality.
 
 from typing import Any, override
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+from google.genai import errors as genai_errors
 import structlog
-from google.generativeai.embedding import (
-    EmbeddingTaskType,
-)
-from google.generativeai.embedding import (
-    embed_content as _embed_content,
-)
-from google.generativeai.generative_models import ChatSession, GenerativeModel
-from google.generativeai.types import GenerationConfig
 
 from flare_ai_rag.ai.base import BaseAIProvider, ModelResponse
 from flare_ai_rag.utils.text_utils import calculate_text_size
@@ -50,37 +44,39 @@ class GeminiProvider(BaseAIProvider):
     and maintains conversation history.
 
     Attributes:
-        chat (generativeai.ChatSession | None): Active chat session
+        client (genai.Client): The Google GenAI client
+        chat (genai.ChatSession | None): Active chat session
     """
 
     def __init__(self, api_key: str, model: str, **kwargs: str) -> None:
         """Initialize the Gemini provider."""
-        genai.configure(api_key=api_key)
+        self.client = genai.Client(api_key=api_key)
         # Strip the "models/" prefix if present since GenerativeModel doesn't expect it
-        model_name = model.replace("models/", "")
-        self.model = genai.GenerativeModel(model_name)
+        self.model_name = model.replace("models/", "")
         self.chat = None
         self.system_instruction = kwargs.get("system_instruction", SYSTEM_INSTRUCTION)
         self.api_key = api_key  # Required by the base class
         self.model_id = model  # Keep track of the original model ID
         self.chat_history = []  # Required by the base class
+        self.initialization_error = None  # Track initialization errors
 
     @override
     def reset(self) -> None:
         """Reset the chat session."""
         self.chat = None
         self.chat_history = []
+        self.initialization_error = None
 
     @override
     def reset_model(self, model: str, **kwargs: str) -> None:
         """Reset the model configuration."""
         # Strip the "models/" prefix if present since GenerativeModel doesn't expect it
-        model_name = model.replace("models/", "")
-        self.model = genai.GenerativeModel(model_name)
+        self.model_name = model.replace("models/", "")
         self.chat = None
         self.model_id = model
         self.system_instruction = kwargs.get("system_instruction", SYSTEM_INSTRUCTION)
         self.chat_history = []
+        self.initialization_error = None
 
     @override
     def generate(
@@ -101,9 +97,10 @@ class GeminiProvider(BaseAIProvider):
             ModelResponse: The generated response
         """
         try:
-            response = self.model.generate_content(
-                prompt,
-                generation_config=GenerationConfig(
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
                     temperature=0.7,
                     top_p=0.8,
                     top_k=40,
@@ -136,29 +133,79 @@ class GeminiProvider(BaseAIProvider):
         Returns:
             ModelResponse: The model's response
         """
+        # Add the user message to chat history
+        self.chat_history.append({"role": "user", "content": msg})
+        
+        # If we had a previous initialization error, return it for follow-up messages
+        if self.initialization_error:
+            error_text = f"Error: Chat session could not be initialized. {self.initialization_error}"
+            self.chat_history.append({"role": "assistant", "content": error_text})
+            return ModelResponse(
+                text=error_text,
+                raw_response=None,
+                metadata={
+                    "model": self.model_id,
+                    "error": self.initialization_error,
+                }
+            )
+        
         try:
+            # Initialize chat session if needed
             if self.chat is None:
-                self.chat = self.model.start_chat(history=[])
-                if self.system_instruction:
-                    self.chat.send_message(self.system_instruction)
+                try:
+                    # Create a new chat session
+                    self.chat = self.client.chats.create(model=self.model_name)
+                    
+                    # Set system instruction if provided
+                    if self.system_instruction:
+                        self.chat.send_message(self.system_instruction)
+                except genai_errors.APIError as e:
+                    logger.error(f"Failed to initialize chat session: {str(e)}")
+                    self.initialization_error = str(e)
+                    error_text = f"Error: Failed to initialize chat session. Please check your API key and model name. Details: {str(e)}"
+                    # Add error response to chat history
+                    self.chat_history.append({"role": "assistant", "content": error_text})
+                    # Return a fallback response
+                    return ModelResponse(
+                        text=error_text,
+                        raw_response=None,
+                        metadata={
+                            "model": self.model_id,
+                            "error": str(e),
+                        }
+                    )
 
+            # At this point, chat is initialized
             response = self.chat.send_message(msg)
+            response_text = response.text
             
-            # Update chat history
-            self.chat_history.append({"role": "user", "content": msg})
-            self.chat_history.append({"role": "assistant", "content": response.text})
+            # Add the assistant response to chat history
+            self.chat_history.append({"role": "assistant", "content": response_text})
             
             return ModelResponse(
-                text=response.text,
+                text=response_text,
                 raw_response=response,
                 metadata={
                     "model": self.model_id,
                     "chat_history": self.chat_history,
                 }
             )
+                
         except Exception as e:
             logger.exception("Error sending message", error=str(e))
-            raise
+            error_text = f"Error: {str(e)}"
+            # Add error response to chat history
+            self.chat_history.append({"role": "assistant", "content": error_text})
+            
+            # Return a fallback response
+            return ModelResponse(
+                text=error_text,
+                raw_response=None,
+                metadata={
+                    "model": self.model_id,
+                    "error": str(e),
+                }
+            )
 
 
 class GeminiEmbedding:
@@ -166,7 +213,7 @@ class GeminiEmbedding:
 
     def __init__(self, api_key: str) -> None:
         """Initialize the embedding client."""
-        genai.configure(api_key=api_key)
+        self.client = genai.Client(api_key=api_key)
 
     def embed_content(
         self,
@@ -195,18 +242,27 @@ class GeminiEmbedding:
         try:
             # Use the model name as provided (with 'models/' prefix)
             # Gemini embed_content expects the full model path
-            response = genai.embed_content(
+            embedding_result = self.client.models.embed_content(
                 model=embedding_model,
-                content=contents,
-                task_type=task_type,
-                title=title,
+                contents=contents,
+                config=types.EmbedContentConfig(
+                    task_type=str(task_type.name) if hasattr(task_type, 'name') else str(task_type),
+                    title=title,
+                ),
             )
             
-            # Verify that we have an embedding in the response
-            if "embedding" not in response:
-                raise ValueError("Response does not contain an embedding")
-                
-            return response["embedding"]
+            # Get the embedding from the result
+            # Extract the values from the embeddings object
+            if hasattr(embedding_result, 'embeddings') and embedding_result.embeddings:
+                # If embeddings is a list, get the first item's values
+                if embedding_result.embeddings and hasattr(embedding_result.embeddings[0], 'values'):
+                    return embedding_result.embeddings[0].values
+                # If it has a values attribute directly
+                elif hasattr(embedding_result.embeddings, 'values'):
+                    return embedding_result.embeddings.values
+            
+            # Fallback
+            raise ValueError("Could not extract embedding values from response")
         except Exception as e:
             logger.exception("Error generating embedding", error=str(e))
             raise

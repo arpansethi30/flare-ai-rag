@@ -24,6 +24,9 @@ from flare_ai_rag.prompts.templates import (
     RAG_ROUTER,
     REMOTE_ATTESTATION,
     SEMANTIC_ROUTER,
+    RESPONDER_SYSTEM_PROMPT_TEMPLATE,
+    RESPONDER_NO_CONTEXT_PROMPT_TEMPLATE,
+    RESPONDER_ATTESTATION_PROMPT_TEMPLATE,
 )
 
 logger = structlog.get_logger(__name__)
@@ -65,6 +68,9 @@ class PromptLibrary:
         - conversational: For general user interactions
         - request_attestation: For remote attestation requests
         - tx_confirmation: For transaction confirmation
+        - responder system prompt
+        - responder no context prompt
+        - responder attestation prompt
 
         This method is called automatically during instance initialization.
         """
@@ -113,6 +119,33 @@ class PromptLibrary:
                 response_schema=None,
                 response_mime_type=None,
                 category="conversational",
+            ),
+            Prompt(
+                name="RESPONDER_SYSTEM_PROMPT",
+                description="System prompt for the responder with context",
+                template=RESPONDER_SYSTEM_PROMPT_TEMPLATE,
+                required_inputs=["context", "query"],
+                response_schema=None,
+                response_mime_type=None,
+                category="responder",
+            ),
+            Prompt(
+                name="RESPONDER_NO_CONTEXT_PROMPT",
+                description="System prompt for the responder with no context",
+                template=RESPONDER_NO_CONTEXT_PROMPT_TEMPLATE,
+                required_inputs=["query"],
+                response_schema=None,
+                response_mime_type=None,
+                category="responder",
+            ),
+            Prompt(
+                name="RESPONDER_ATTESTATION_PROMPT",
+                description="System prompt for the responder with attestation",
+                template=RESPONDER_ATTESTATION_PROMPT_TEMPLATE,
+                required_inputs=["query"],
+                response_schema=None,
+                response_mime_type=None,
+                category="responder",
             ),
         ]
 

@@ -3,7 +3,9 @@ import { Send } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import './index.css';
 
-const BACKEND_ROUTE = "http://localhost:8081/api/routes/chat/";
+const BACKEND_ROUTE = "http://localhost:8088/api/routes/chat/";
+
+// Rest of the file will be appended below
 
 // Rest of the file will be appended below
 

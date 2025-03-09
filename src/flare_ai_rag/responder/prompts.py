@@ -1,23 +1,28 @@
-RESPONDER_INSTRUCTION = """You are an AI assistant that synthesizes information from
-multiple sources to provide accurate, concise, and well-cited answers.
-You receive a user's question along with relevant context documents.
-Your task is to analyze the provided context, extract key information, and
-generate a final response that directly answers the query.
+"""
+Prompts for the responder module.
 
-Guidelines:
-- Use the provided context to support your answer. ALWAYS
-include citations referring to the context as [Doc1], [Doc2], etc. when presenting information.
-- Be clear, factual, and concise. Do not introduce any information that isn't
-explicitly supported by the context.
-- Maintain a professional tone and ensure that all technical details are accurate.
-- Avoid adding any information that is not supported by the context.
-- When multiple documents provide relevant information, cite all of them.
-- Format your answer in a way that clearly distinguishes between different pieces of information and their sources.
-- If the provided context doesn't contain sufficient information to answer the query completely, acknowledge the limitations.
-
-Generate an answer to the user query based solely on the given context.
+This module contains prompts for the responder module.
 """
 
-RESPONDER_PROMPT = (
-    """Generate an answer to the user query based solely on the given context. Include proper citations to documents."""
+# Import directly from templates.py to avoid circular imports
+from flare_ai_rag.prompts.templates import (
+    PromptTemplate,
+    RESPONDER_SYSTEM_PROMPT_TEMPLATE,
+    RESPONDER_NO_CONTEXT_PROMPT_TEMPLATE,
+    RESPONDER_ATTESTATION_PROMPT_TEMPLATE,
+    RESPONDER_INSTRUCTION,
+    RESPONDER_PROMPT
 )
+
+# System prompt for the responder
+RESPONDER_SYSTEM_PROMPT = PromptTemplate(RESPONDER_SYSTEM_PROMPT_TEMPLATE)
+
+# System prompt for the responder with no context
+RESPONDER_NO_CONTEXT_PROMPT = PromptTemplate(RESPONDER_NO_CONTEXT_PROMPT_TEMPLATE)
+
+# System prompt for the responder with attestation
+RESPONDER_ATTESTATION_PROMPT = PromptTemplate(RESPONDER_ATTESTATION_PROMPT_TEMPLATE)
+
+# Re-export the constants to avoid circular imports
+INSTRUCTION = RESPONDER_INSTRUCTION
+PROMPT = RESPONDER_PROMPT

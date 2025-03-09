@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from flare_ai_rag.ai import Model
-from flare_ai_rag.responder.prompts import RESPONDER_INSTRUCTION, RESPONDER_PROMPT
+from flare_ai_rag.responder.prompts import INSTRUCTION, PROMPT
 
 
 @dataclass(frozen=True)
@@ -19,9 +19,8 @@ class ResponderConfig:
             max_tokens=model_config.get("max_tokens"),
             temperature=model_config.get("temperature"),
         )
-
         return ResponderConfig(
             model=model,
-            system_prompt=RESPONDER_INSTRUCTION,
-            query_prompt=RESPONDER_PROMPT,
+            system_prompt=model_config.get("system_prompt", INSTRUCTION),
+            query_prompt=model_config.get("query_prompt", PROMPT),
         )

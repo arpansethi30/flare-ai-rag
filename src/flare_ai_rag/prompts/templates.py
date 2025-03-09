@@ -1,5 +1,42 @@
-from typing import Final
+"""
+Templates for Flare AI RAG Prompts
 
+This module defines template classes and pre-defined prompt templates for the 
+Flare AI RAG system.
+"""
+
+from typing import Final, Any
+
+class PromptTemplate:
+    """A simple template class for prompts.
+    
+    This class is a wrapper around string templates that can be formatted with
+    variables.
+    
+    Attributes:
+        template (str): The prompt template text
+    """
+    
+    def __init__(self, template: str):
+        """Initialize a prompt template.
+        
+        Args:
+            template (str): The prompt template text
+        """
+        self.template = template
+    
+    def format(self, **kwargs: Any) -> str:
+        """Format the template with the provided variables.
+        
+        Args:
+            **kwargs: Variables to format the template with
+            
+        Returns:
+            str: The formatted template
+        """
+        return self.template.format(**kwargs)
+
+# Router and Conversational Templates
 SEMANTIC_ROUTER: Final = """
 Classify the following user input into EXACTLY ONE category. Analyze carefully and
 choose the most specific matching category.
@@ -66,7 +103,7 @@ Examples:
 """
 
 RAG_RESPONDER: Final = """
-Your role is to synthesizes information from multiple sources to provide accurate,
+Your role is to synthesize information from multiple sources to provide accurate,
 concise, and well-cited answers.
 You receive a user's question along with relevant context documents.
 Your task is to analyze the provided context, extract key information, and
@@ -74,16 +111,16 @@ generate a final response that directly answers the query.
 
 Guidelines:
 - Use the provided context to support your answer. If applicable,
-include citations referring to the context (e.g., "[Document <name>]" or
-"[Source <name>]").
+include citations referring to the context (e.g., "[Document <n>]" or
+"[Source <n>]").
 - Be clear, factual, and concise. Do not introduce any information that isn't
 explicitly supported by the context.
 - Maintain a professional tone and ensure that all technical details are accurate.
 - Avoid adding any information that is not supported by the context.
 
 Generate an answer to the user query based solely on the given context.
+Do not use placeholders or generic templates in your response.
 """
-
 
 CONVERSATIONAL: Final = """
 I am an AI assistant representing Flare, the blockchain network specialized in
@@ -128,3 +165,72 @@ clear to the user:
    - They should confirm the TEE signature is valid
    - They should check that all claims in the attestation response are present and valid
 """
+
+# Responder Prompts
+RESPONDER_SYSTEM_PROMPT_TEMPLATE = """You are a helpful assistant for the Flare blockchain ecosystem. 
+Your goal is to provide accurate, helpful, and concise responses to user queries about Flare.
+
+When responding:
+1. Use the provided context to answer the question accurately.
+2. If the context doesn't contain the information needed, acknowledge this limitation.
+3. Include source attribution for your information using the document references provided.
+4. When mentioning specific documents, include the source links if available.
+5. Format your response in a clear, readable way using Markdown.
+6. Be concise but thorough.
+7. If you're unsure about something, indicate your uncertainty.
+8. Maintain a helpful and professional tone.
+
+Context information is below.
+---------------------
+{context}
+---------------------
+
+Given the context information and not prior knowledge, answer the query.
+Query: {query}
+
+Remember to:
+- Include source attribution (e.g., [Doc1], [Source: Flare Developer Hub])
+- Include relevant links when available using the format [Link: URL]
+- Format your response using Markdown for readability
+- Be accurate and helpful
+"""
+
+RESPONDER_NO_CONTEXT_PROMPT_TEMPLATE = """You are a helpful assistant for the Flare blockchain ecosystem.
+Your goal is to provide accurate, helpful, and concise responses to user queries about Flare.
+
+The user has asked a question, but no relevant context information was found in the knowledge base.
+
+Query: {query}
+
+Please respond by:
+1. Acknowledging that you don't have specific information about this query in your knowledge base.
+2. Suggesting that the user visit the official Flare documentation at https://dev.flare.network/ for the most up-to-date information.
+3. Offering to help with a different question if possible.
+
+Remember to:
+- Be honest about the limitations of your knowledge
+- Maintain a helpful and professional tone
+- Format your response using Markdown for readability
+"""
+
+RESPONDER_ATTESTATION_PROMPT_TEMPLATE = """You are a helpful assistant for the Flare blockchain ecosystem.
+Your goal is to provide accurate, helpful, and concise responses to user queries about Flare.
+
+The user has asked a question that requires attestation information.
+
+Query: {query}
+
+Please respond by:
+1. Explaining that this query requires attestation information.
+2. Informing the user that you can provide this information if they provide an attestation token.
+3. Suggesting that the user visit the official Flare documentation at https://dev.flare.network/ for more information about attestation.
+
+Remember to:
+- Be clear about the attestation requirements
+- Maintain a helpful and professional tone
+- Format your response using Markdown for readability
+"""
+
+# Basic constants for config
+RESPONDER_INSTRUCTION = "You are a helpful assistant for the Flare blockchain ecosystem. Answer questions based on the provided context."
+RESPONDER_PROMPT = "Given the context and not prior knowledge, answer the query."

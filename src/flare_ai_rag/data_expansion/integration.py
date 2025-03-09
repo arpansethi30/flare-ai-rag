@@ -5,7 +5,6 @@ This module provides integration between the original retriever and the extended
 """
 
 import logging
-from collections.abc import Generator
 from typing import Any, override
 
 from flare_ai_rag.data_expansion.service import DataExpansionService
@@ -43,100 +42,124 @@ class CombinedRetriever(BaseRetriever):
         self.expansion_service = expansion_service
         self.max_results = max_results
         self.ratio = max(0.0, min(1.0, ratio))  # Ensure ratio is between 0 and 1
+        
+        # For convenience, expose the embedding client from the original retriever
+        self.embedding_client = original_retriever.embedding_client
     
     @override
-    def semantic_search(self, query: str, top_k: int = 5) -> list[dict]:
+    def semantic_search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
         """
         Perform semantic search across both datasets.
         
         Args:
             query: Query string
-            top_k: Maximum number of results to return
+            top_k: Number of results to return
             
         Returns:
-            List of document dictionaries with combined results
+            Combined search results
         """
         # Calculate how many results to take from each source
-        original_k = int(top_k * (1 - self.ratio))
-        expanded_k = top_k - original_k
-        
-        # Ensure we always get at least one result from each source if ratio is not 0 or 1
-        if 0 < self.ratio < 1:
-            original_k = max(1, original_k)
-            expanded_k = max(1, expanded_k)
-            # Recalculate total if needed
-            if original_k + expanded_k > top_k:
-                # Prioritize expanded results slightly
-                original_k = top_k - expanded_k
+        expanded_k = max(1, int(top_k * self.ratio))
+        original_k = max(1, top_k - expanded_k)
         
         # Get results from original retriever
-        logger.debug(f"Querying original retriever for {original_k} results")
-        original_results = []
-        if original_k > 0:
-            try:
-                original_results = self.original_retriever.semantic_search(query, original_k)
-                logger.debug(f"Got {len(original_results)} results from original retriever")
-            except Exception as e:
-                logger.error(f"Error retrieving from original source: {e}")
+        try:
+            original_results = self.original_retriever.semantic_search(query, top_k=original_k)
+            logger.info(f"Got {len(original_results)} results from original retriever")
+        except Exception as e:
+            logger.error(f"Error getting results from original retriever: {e}")
+            original_results = []
         
         # Get results from expanded dataset
-        logger.debug(f"Querying expanded dataset for {expanded_k} results")
-        expanded_results = []
-        if expanded_k > 0:
-            try:
-                # Check if data expansion is enabled
-                if self.expansion_service.config.enabled:
-                    expanded_results = self.expansion_service.search_expanded_dataset(
-                        query, expanded_k
-                    )
-                    logger.debug(f"Got {len(expanded_results)} results from expanded dataset")
-                else:
-                    logger.debug("Data expansion is disabled, skipping")
-            except Exception as e:
-                logger.error(f"Error retrieving from expanded dataset: {e}")
+        try:
+            expanded_results = self.expansion_service.search(query, limit=expanded_k)
+            logger.info(f"Got {len(expanded_results)} results from expanded dataset")
+        except Exception as e:
+            logger.error(f"Error getting results from expanded dataset: {e}")
+            expanded_results = []
         
         # Combine results
-        combined_results = self._combine_results(original_results, expanded_results)
+        combined_results = []
         
-        return combined_results[:top_k]
-    
-    def _combine_results(
-        self, original_results: list[dict], expanded_results: list[dict]
-    ) -> list[dict]:
-        """
-        Combine results from both sources, ordering by relevance score.
+        # Add original results
+        for result in original_results:
+            # Add a source marker
+            result["source"] = "original"
+            combined_results.append(result)
         
-        Args:
-            original_results: Results from original retriever
-            expanded_results: Results from expanded dataset
-            
-        Returns:
-            Combined and sorted list of results
-        """
-        # Convert expanded results to match original format if needed
-        normalized_expanded = []
+        # Add expanded results
         for result in expanded_results:
-            # Create a normalized result that matches the original format
-            normalized = {
+            # Convert to the same format as original results
+            formatted_result = {
                 "text": result.get("text", ""),
                 "score": result.get("score", 0.0),
-                # Add a source identifier
                 "source": "expanded",
+                "url": result.get("url", ""),
+                "title": result.get("title", ""),
+                "file_name": result.get("file_name", ""),
             }
+            combined_results.append(formatted_result)
+        
+        # Sort by score
+        combined_results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+        
+        # Limit to max_results
+        return combined_results[:self.max_results]
+
+
+class EnhancedRetriever(BaseRetriever):
+    """
+    Enhanced retriever that uses only the expanded dataset.
+    
+    This retriever is useful for testing the expanded dataset without
+    the original dataset.
+    """
+    
+    def __init__(
+        self,
+        expansion_service: DataExpansionService,
+        embedding_client: Any,
+    ):
+        """
+        Initialize the enhanced retriever.
+        
+        Args:
+            expansion_service: Data expansion service
+            embedding_client: Embedding client
+        """
+        self.expansion_service = expansion_service
+        self.embedding_client = embedding_client
+    
+    @override
+    def semantic_search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+        """
+        Perform semantic search on the expanded dataset.
+        
+        Args:
+            query: Query string
+            top_k: Number of results to return
             
-            # Copy metadata
-            metadata = result.get("metadata", {})
-            if metadata:
-                normalized["metadata"] = metadata
+        Returns:
+            Search results
+        """
+        try:
+            results = self.expansion_service.search(query, limit=top_k)
+            logger.info(f"Got {len(results)} results from expanded dataset")
             
-            normalized_expanded.append(normalized)
-        
-        # Add source identifier to original results
-        for result in original_results:
-            result["source"] = "original"
-        
-        # Combine and sort by score
-        combined = original_results + normalized_expanded
-        combined.sort(key=lambda x: x.get("score", 0.0), reverse=True)
-        
-        return combined 
+            # Convert to the same format as original results
+            formatted_results = []
+            for result in results:
+                formatted_result = {
+                    "text": result.get("text", ""),
+                    "score": result.get("score", 0.0),
+                    "source": "expanded",
+                    "url": result.get("url", ""),
+                    "title": result.get("title", ""),
+                    "file_name": result.get("file_name", ""),
+                }
+                formatted_results.append(formatted_result)
+            
+            return formatted_results
+        except Exception as e:
+            logger.error(f"Error getting results from expanded dataset: {e}")
+            return [] 

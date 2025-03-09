@@ -41,6 +41,7 @@ class ScraperConfig:
     max_retries: int = 3
     respect_robots_txt: bool = True
     follow_links: bool = True
+    follow_external_links: bool = False  # Whether to follow links to external domains
     max_depth: int = 2  # Maximum link following depth
 
 
@@ -125,6 +126,7 @@ class DataExpansionConfig:
                 "max_retries": self.scraper.max_retries,
                 "respect_robots_txt": self.scraper.respect_robots_txt,
                 "follow_links": self.scraper.follow_links,
+                "follow_external_links": self.scraper.follow_external_links,
                 "max_depth": self.scraper.max_depth,
             },
             "processor": {

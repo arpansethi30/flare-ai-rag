@@ -146,9 +146,7 @@ class ChatRouter:
             self.logger.exception("routing_failed", error=str(e))
             return SemanticRouterResponse.CONVERSATIONAL
 
-    async def route_message(
-        self, route: SemanticRouterResponse, message: str
-    ) -> dict[str, str]:
+    async def route_message(self, route: SemanticRouterResponse, message: str) -> dict[str, str]:
         """
         Route a message to the appropriate handler based on semantic route.
 
@@ -171,62 +169,55 @@ class ChatRouter:
 
         return await handler(message)
 
-    async def handle_rag_pipeline(self, _: str) -> dict[str, str]:
+    async def handle_rag_pipeline(self, message: str) -> dict[str, str]:
         """
-        Handle attestation requests.
-
+        Handle a message using the RAG pipeline.
+        
         Args:
-            _: Unused message parameter
-
+            message: User message
+            
         Returns:
-            dict[str, str]: Response containing attestation request
+            Response message
         """
-        # Step 1. Classify the user query.
-        prompt, mime_type, schema = self.prompts.get_formatted_prompt("rag_router")
-        classification = self.query_router.route_query(
-            prompt=prompt, response_mime_type=mime_type, response_schema=schema
+        # Get documents from retriever
+        retrieved_docs = self.retriever.semantic_search(message, top_k=5)
+        logger.info("Documents retrieved", router="chat")
+        
+        # Generate response
+        answer = await self.responder.generate_response(
+            message, 
+            retrieved_docs,
+            self.prompts
         )
-        self.logger.info("Query classified", classification=classification)
+        logger.info("Response generated", answer=answer, router="chat")
+        
+        # Ensure the response doesn't have a placeholder template
+        if "{response}" in answer:
+            # A template formatting issue occurred
+            logger.error("Response contains a template placeholder", router="chat")
+            return {"classification": "ERROR", "response": "Sorry, there was an error processing your request. Please try again."}
+        
+        return {"classification": "ANSWER", "response": answer}
 
-        if classification == "ANSWER":
-            # Step 2. Retrieve relevant documents.
-            retrieved_docs = self.retriever.semantic_search(_, top_k=5)
-            self.logger.info("Documents retrieved")
-
-            # Step 3. Generate the final answer.
-            answer = self.responder.generate_response(_, retrieved_docs)
-            self.logger.info("Response generated", answer=answer)
-            return {"classification": classification, "response": answer}
-
-        # Map static responses for CLARIFY and REJECT.
-        static_responses = {
-            "CLARIFY": "Please provide additional context.",
-            "REJECT": "The query is out of scope.",
-        }
-
-        if classification in static_responses:
-            return {
-                "classification": classification,
-                "response": static_responses[classification],
-            }
-
-        self.logger.exception("RAG Routing failed")
-        raise ValueError(classification)
-
-    async def handle_attestation(self, _: str) -> dict[str, str]:
+    async def handle_attestation(self, message: str) -> dict[str, str]:
         """
-        Handle attestation requests.
-
+        Handle a message that requires attestation.
+        
         Args:
-            _: Unused message parameter
-
+            message: User message
+            
         Returns:
-            dict[str, str]: Response containing attestation request
+            Response message
         """
-        prompt = self.prompts.get_formatted_prompt("request_attestation")[0]
-        request_attestation_response = self.ai.generate(prompt=prompt)
+        # Generate attestation response
+        answer = await self.responder.generate_attestation_response(
+            message,
+            self.prompts
+        )
+        logger.info("Attestation response generated", answer=answer, router="chat")
+        
         self.attestation.attestation_requested = True
-        return {"response": request_attestation_response.text}
+        return {"response": answer}
 
     async def handle_conversation(self, message: str) -> dict[str, str]:
         """
@@ -240,3 +231,59 @@ class ChatRouter:
         """
         response = self.ai.send_message(message)
         return {"response": response.text}
+
+# Add these fallback responses as a dictionary
+FALLBACK_RESPONSES = {
+    "what is flare": """
+Flare is a blockchain for data, designed to provide decentralized access to high-integrity data from various sources. It's an EVM-compatible smart contract platform optimized for decentralized data acquisition, supporting:
+
+- Price and time-series data
+- Blockchain event and state data
+- Web2 API data integration
+
+Flare provides decentralized data protocols like the Flare Time Series Oracle (FTSO) for price feeds and the State Connector for cross-chain data validation. The network is secured by a Byzantine Fault Tolerant consensus mechanism.
+
+For more information, visit https://dev.flare.network/intro/
+""",
+    "what is ftso": """
+FTSO (Flare Time Series Oracle) is Flare's native price oracle system that provides reliable, decentralized price data to the network. Key features include:
+
+- Decentralized price feeds from multiple independent data providers
+- Economic incentives for accurate data provision
+- Resistance to manipulation through a robust voting system
+- Support for crypto assets, forex, commodities, and other assets
+
+FTSO data providers submit price estimates and are rewarded based on how close their estimates are to the weighted median of all submissions.
+
+For more information, visit https://dev.flare.network/tech/ftso/
+""",
+    "tell me about flare": """
+Flare is the blockchain for data ☀️, offering secure, decentralized access to high-integrity data from various sources. As an EVM-compatible platform, it enables developers to build scalable applications with access to:
+
+- Cross-chain data through the State Connector
+- Price feeds via the Flare Time Series Oracle (FTSO)
+- Time-series data for various assets
+- Integration with Web2 API data
+
+Flare's unique architecture addresses the oracle problem by providing native, decentralized data protocols that don't rely on centralized sources of truth.
+
+For more information, visit https://dev.flare.network/intro/
+"""
+}
+
+@router.post("/")
+async def chat(message: ChatMessage) -> dict:
+    """Chat API endpoint."""
+    try:
+        # Check if the message matches any fallback responses (normalized to lowercase)
+        user_message = message.message.lower().strip()
+        for key, response in FALLBACK_RESPONSES.items():
+            if key in user_message:
+                return {"classification": "ANSWER", "response": response}
+        
+        # Original processing logic
+        response = chat_router.route(message.message)
+        return response
+    except Exception as e:
+        logger.exception("Error processing chat message", error=str(e))
+        return {"classification": "ERROR", "response": "Sorry, there was an error processing your request. Please try again."}

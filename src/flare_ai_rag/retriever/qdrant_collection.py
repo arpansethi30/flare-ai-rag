@@ -2,6 +2,8 @@ import google.api_core.exceptions
 import pandas as pd
 import structlog
 import uuid
+import time
+import random
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, PointStruct, VectorParams
 
@@ -22,10 +24,20 @@ def _create_collection(
     :param collection_name: Name of the collection.
     :param vector_size: Dimension of the vectors.
     """
+    # Check if collection already exists
+    collections = client.get_collections().collections
+    collection_names = [collection.name for collection in collections]
+    
+    if collection_name in collection_names:
+        logger.info(f"Collection {collection_name} already exists, skipping creation.")
+        return
+        
+    # Create new collection if it doesn't exist
     client.recreate_collection(
         collection_name=collection_name,
         vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
     )
+    logger.info(f"Created new collection: {collection_name}")
 
 
 def process_document(content: str, metadata: dict) -> list[dict]:
@@ -69,15 +81,31 @@ def generate_collection(
     embedding_client: GeminiEmbedding,
 ) -> None:
     """Routine for generating a Qdrant collection for a specific CSV file type."""
+    # Create collection if it doesn't exist
     _create_collection(
         qdrant_client, retriever_config.collection_name, retriever_config.vector_size
     )
+    
+    # Check if collection already has points
+    collection_info = qdrant_client.get_collection(retriever_config.collection_name)
+    if collection_info.points_count > 0:
+        logger.info(
+            f"Collection {retriever_config.collection_name} already has {collection_info.points_count} points. Skipping embedding generation."
+        )
+        return
+    
     logger.info(
-        "Created the collection.", collection_name=retriever_config.collection_name
+        "Populating the collection with embeddings.", collection_name=retriever_config.collection_name
     )
 
     points = []
-    for idx, (_, row) in enumerate(df_docs.iterrows(), start=1):
+    # Process a larger subset of documents
+    sample_size = min(50, len(df_docs))
+    sample_df = df_docs.sample(n=sample_size)
+    
+    logger.info(f"Processing {sample_size} documents out of {len(df_docs)} to build knowledge base.")
+    
+    for idx, (_, row) in enumerate(sample_df.iterrows(), start=1):
         content = row.get("content")
         if not isinstance(content, str):
             logger.warning(
@@ -110,31 +138,60 @@ def generate_collection(
                 )
                 continue
                 
-            try:
-                embedding = embedding_client.embed_content(
-                    embedding_model=retriever_config.embedding_model,
-                    contents=text_content,
-                    task_type=EmbeddingTaskType.RETRIEVAL_DOCUMENT,
-                )
-                
-                # Generate a unique integer ID by combining the document index and chunk index
-                point_id = idx * 1000 + chunk_data.get("chunk_index", 0)
-                
-                point = PointStruct(
-                    id=point_id,  # Using numeric ID format
-                    vector=embedding,
-                    payload=chunk_data
-                )
-                points.append(point)
-                
-            except google.api_core.exceptions.InvalidArgument as e:
-                logger.warning(
-                    "Failed to generate embedding.",
-                    error=str(e),
-                    filename=metadata["file_name"],
-                    chunk_index=chunk_data.get("chunk_index", 0)
-                )
-                continue
+            # Retry logic with exponential backoff
+            max_retries = 5
+            retry_count = 0
+            base_delay = 2  # seconds
+            
+            while retry_count < max_retries:
+                try:
+                    embedding = embedding_client.embed_content(
+                        embedding_model=retriever_config.embedding_model,
+                        contents=text_content,
+                        task_type=EmbeddingTaskType.RETRIEVAL_DOCUMENT,
+                    )
+                    
+                    # Generate a unique integer ID by combining the document index and chunk index
+                    point_id = idx * 1000 + chunk_data.get("chunk_index", 0)
+                    
+                    point = PointStruct(
+                        id=point_id,  # Using numeric ID format
+                        vector=embedding,
+                        payload=chunk_data
+                    )
+                    points.append(point)
+                    
+                    # Add a delay to avoid hitting rate limits (1-2 seconds)
+                    time.sleep(1 + random.random())
+                    
+                    # If successful, break out of the retry loop
+                    break
+                    
+                except google.api_core.exceptions.ResourceExhausted as e:
+                    # Rate limit error, implement exponential backoff
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        delay = base_delay ** retry_count + random.random()
+                        logger.warning(
+                            f"Rate limit exceeded. Retrying in {delay:.2f} seconds. Attempt {retry_count}/{max_retries}",
+                            error=str(e)
+                        )
+                        time.sleep(delay)
+                    else:
+                        logger.error(
+                            f"Failed to generate embedding after {max_retries} attempts. Skipping chunk.",
+                            error=str(e),
+                            filename=metadata["file_name"],
+                            chunk_index=chunk_data.get("chunk_index", 0)
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to generate embedding.",
+                        error=str(e),
+                        filename=metadata["file_name"],
+                        chunk_index=chunk_data.get("chunk_index", 0)
+                    )
+                    break  # Non-rate limit error, don't retry
 
     # Upload points in batches
     if points:

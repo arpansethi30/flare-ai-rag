@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Dict, Optional
+from typing import Any
 
 from qdrant_client import QdrantClient
 
@@ -157,27 +157,56 @@ class DataExpansionService:
         
         return results
     
-    def search_expanded_dataset(self, 
-                                query: str, 
-                                top_k: int = 5, 
-                                filter_params: dict | None = None
-                               ) -> list[dict[str, Any]]:
+    def search(self, query: str, limit: int = 5) -> list[dict]:
         """
         Search the expanded dataset.
         
         Args:
-            query: Search query
-            top_k: Maximum number of results to return
-            filter_params: Optional filter parameters
+            query: Query string
+            limit: Maximum number of results to return
             
         Returns:
-            List of matching documents
+            List of search results
         """
-        if not self.config.enabled:
-            logger.info("Data expansion is disabled, returning empty results")
-            return []
+        logger.info(f"Searching expanded dataset for '{query}' (limit={limit})")
         
-        return self.collection.search(query, top_k, filter_params)
+        try:
+            # Generate embedding for query
+            query_vector = self.embedding_client.embed_content(
+                embedding_model="models/text-embedding-004",
+                contents=query,
+                task_type=EmbeddingTaskType.RETRIEVAL_QUERY,
+            )
+            
+            # Search in Qdrant
+            results = self.qdrant_client.search(
+                collection_name=self.config.storage.collection_name,
+                query_vector=query_vector,
+                limit=limit,
+            )
+            
+            # Convert results to dictionaries
+            formatted_results = []
+            for hit in results:
+                if hit.payload:
+                    result = {
+                        "text": hit.payload.get("text", ""),
+                        "score": hit.score,
+                        "url": hit.payload.get("url", ""),
+                    }
+                    
+                    # Add metadata fields
+                    for key, value in hit.payload.items():
+                        if key not in ["text", "score", "url"]:
+                            result[key] = value
+                    
+                    formatted_results.append(result)
+            
+            logger.info(f"Found {len(formatted_results)} results in expanded dataset")
+            return formatted_results
+        except Exception as e:
+            logger.error(f"Error searching expanded dataset: {e}")
+            return []
     
     def get_collection_info(self) -> dict[str, Any]:
         """
