@@ -7,10 +7,155 @@ Flare AI Kit template for Retrieval-Augmented Generation (RAG) Knowledge.
 
 ## 🚀 Key Features
 
-- **Modular Architecture:** Designed with independent components that can be easily extended.
-- **Qdrant-Powered Retrieval:** Leverages Qdrant for fast, semantic document retrieval, but can easily be adapted to other vector databases.
-- **Highly Configurable & Extensible:** Uses a straightforward configuration system, enabling effortless integration of new features and services.
-- **Unified LLM Integration:** Leverages Gemini as a unified provider while maintaining compatibility with OpenRouter for a broader range of models.
+* **Modular Architecture:** Designed with independent components that can be easily extended.
+* **Qdrant-Powered Retrieval:** Leverages Qdrant for fast, semantic document retrieval.
+* **Gemini Pro Integration:** Uses Gemini Pro for high-quality text generation.
+* **Pre-loaded Documentation:** The Flare Developer Hub is included in CSV format for local testing.
+
+## 🛠️ Requirements
+
+* Python 3.10 or higher
+* Node.js 18.x or higher (for Chat UI)
+* Docker (for Qdrant)
+* Gemini API key
+
+## 🔧 Setup Instructions
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/flare-foundation/flare-ai-rag.git
+cd flare-ai-rag
+```
+
+### 2. Set Up the Environment
+
+Create a Python virtual environment and activate it:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+Install the required dependencies:
+
+```bash
+pip install -e .
+```
+
+### 3. Set Up Your API Key
+
+Copy the example environment file:
+
+```bash
+cp .env.example .env
+```
+
+Edit the `.env` file and add your Gemini API key:
+
+```
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+You can get a Gemini API key from [Google AI Studio](https://makersuite.google.com/app/apikey).
+
+### 4. Install Frontend Dependencies
+
+```bash
+cd chat-ui
+npm install
+cd ..
+```
+
+## 🏃‍♂️ Running the Application
+
+### All-in-One Script
+
+The simplest way to run the application is to use the provided script:
+
+```bash
+./run_app.sh
+```
+
+This script will:
+1. Start Qdrant using Docker
+2. Start the backend server
+3. Start the frontend development server
+4. Provide URLs to access the application
+
+### Manual Startup
+
+If you prefer to start components individually:
+
+1. **Start Qdrant:**
+   ```bash
+   docker run -d -p 6333:6333 -v $(pwd)/storage:/qdrant/storage qdrant/qdrant
+   ```
+
+2. **Start the Backend:**
+   ```bash
+   src/start-backend
+   ```
+
+3. **Start the Frontend:**
+   ```bash
+   cd chat-ui
+   npm start
+   ```
+
+## 📋 Project Structure
+
+```
+src/flare_ai_rag/
+├── ai/                     # AI Provider implementations
+│   ├── base.py            # Abstract base classes
+│   ├── gemini.py          # Google Gemini integration
+│   ├── model.py           # Model definitions
+│   └── openrouter.py      # OpenRouter integration
+├── api/                    # API layer
+│   ├── middleware/        # Request/response middleware
+│   └── routes/           # API endpoint definitions
+├── attestation/           # TEE security layer
+│   ├── simulated_token.txt
+│   ├── vtpm_attestation.py  # vTPM client
+│   └── vtpm_validation.py   # Token validation
+├── prompts/              # AI system prompts & templates
+│   ├── library.py        # Prompt module library
+│   ├── schemas.py        # Schema definitions
+│   ├── service.py        # Prompt service module
+│   └── templates.py       # Prompt templates
+├── responder/            # Response generation
+│   ├── base.py           # Base responder interface
+│   ├── config.py         # Response configuration
+│   ├── prompts.py        # System prompts
+│   └── responder.py      # Main responder logic
+├── retriever/            # Document retrieval
+│   ├── base.py          # Base retriever interface
+│   ├── config.py        # Retriever configuration
+│   ├── qdrant_collection.py  # Qdrant collection management
+│   └── qdrant_retriever.py   # Qdrant implementation
+├── router/               # API routing
+│   ├── base.py          # Base router interface
+│   ├── config.py        # Router configuration
+│   ├── prompts.py       # Router prompts
+│   └── router.py        # Main routing logic
+├── utils/               # Utility functions
+│   ├── file_utils.py    # File operations
+│   └── parser_utils.py  # Input parsing
+├── input_parameters.json # Configuration parameters
+├── main.py              # Application entry point
+├── streamlined_api.py   # Streamlined API for easier integration
+├── streamlined_rag.py   # Simplified RAG implementation
+└── settings.py         # Environment settings
+```
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 📄 License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ## 🎯 Getting Started
 
@@ -102,51 +247,6 @@ Flare AI RAG is composed of a Python-based backend and a JavaScript frontend. Fo
    ```bash
    npm start
    ```
-
-## 📁 Repo Structure
-
-```
-src/flare_ai_rag/
-├── ai/                     # AI Provider implementations
-│   ├── base.py            # Abstract base classes
-│   ├── gemini.py          # Google Gemini integration
-│   ├── model.py           # Model definitions
-│   └── openrouter.py      # OpenRouter integration
-├── api/                    # API layer
-│   ├── middleware/        # Request/response middleware
-│   └── routes/           # API endpoint definitions
-├── attestation/           # TEE security layer
-│   ├── simulated_token.txt
-│   ├── vtpm_attestation.py  # vTPM client
-│   └── vtpm_validation.py   # Token validation
-├── prompts/              # AI system prompts & templates
-│   ├── library.py        # Prompt module library
-│   ├── schemas.py        # Schema definitions
-│   ├── service.py        # Prompt service module
-│   └── templates.py       # Prompt templates
-├── responder/            # Response generation
-│   ├── base.py           # Base responder interface
-│   ├── config.py         # Response configuration
-│   ├── prompts.py        # System prompts
-│   └── responder.py      # Main responder logic
-├── retriever/            # Document retrieval
-│   ├── base.py          # Base retriever interface
-│   ├── config.py        # Retriever configuration
-│   ├── qdrant_collection.py  # Qdrant collection management
-│   └── qdrant_retriever.py   # Qdrant implementation
-├── router/               # API routing
-│   ├── base.py          # Base router interface
-│   ├── config.py        # Router configuration
-│   ├── prompts.py       # Router prompts
-│   └── router.py        # Main routing logic
-├── utils/               # Utility functions
-│   ├── file_utils.py    # File operations
-│   └── parser_utils.py  # Input parsing
-├── input_parameters.json # Configuration parameters
-├── main.py              # Application entry point
-├── query.txt           # Sample queries
-└── settings.py         # Environment settings
-```
 
 ## 🚀 Deploy on TEE
 

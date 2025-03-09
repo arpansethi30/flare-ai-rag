@@ -1,15 +1,36 @@
 {
     "router_model": {
-        "id": "models/gemini-1.5-pro"
+        "model": {
+            "model_id": "models/gemini-1.5-pro",
+            "config": {}
+        },
+        "params": {
+            "candidate_count": 1,
+            "temperature": 0.1,
+            "max_output_tokens": 256,
+            "top_p": 0.95,
+            "top_k": 40
+        }
     },
     "retriever_config": {
-        "embedding_model": "models/embedding-001",
-        "vector_size": 768,
+        "embedding_model": "models/text-embedding-004",
         "collection_name": "docs_collection",
+        "vector_size": 768,
         "host": "localhost",
         "port": 6333
     },
     "responder_model": {
-        "id": "models/gemini-1.5-pro"
+        "model": {
+            "model_id": "models/gemini-1.5-pro",
+            "config": {}
+        },
+        "system_prompt": "You are a helpful assistant for Flare Network.",
+        "params": {
+            "candidate_count": 1,
+            "temperature": 0.1,
+            "max_output_tokens": 2048,
+            "top_p": 0.95,
+            "top_k": 40
+        }
     }
 }

@@ -1,154 +1,152 @@
 #!/bin/bash
+set -e
 
-# Flare AI RAG Application Runner
-# This script sets up and runs both the backend and frontend of the Flare AI RAG application
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-echo "🔄 Starting Flare AI RAG application..."
-echo "======================================="
+# Check if Python environment is activated
+if [[ -z "${VIRTUAL_ENV}" ]]; then
+    echo -e "${YELLOW}No Python virtual environment detected. Make sure to activate your virtual environment before running this script.${NC}"
+    echo -e "Example: ${BLUE}source .venv/bin/activate${NC} or ${BLUE}conda activate your-env-name${NC}"
+    exit 1
+fi
 
-# Configuration
-BACKEND_PORT=${BACKEND_PORT:-8080}
-FRONTEND_PORT=${FRONTEND_PORT:-3000}
+# Check if required environment variables are set
+if [[ -f .env ]]; then
+    source .env
+    echo -e "${GREEN}Loaded environment variables from .env file${NC}"
+else
+    echo -e "${YELLOW}No .env file found. Using environment variables from current shell.${NC}"
+fi
+
+if [[ -z "${GEMINI_API_KEY}" ]]; then
+    echo -e "${RED}ERROR: GEMINI_API_KEY environment variable is not set. Please set it before running the app.${NC}"
+    echo -e "You can create an API key at: ${BLUE}https://makersuite.google.com/app/apikey${NC}"
+    exit 1
+fi
+
+# Function to check if a port is in use
+is_port_in_use() {
+    if command -v lsof > /dev/null; then
+        lsof -i :$1 > /dev/null
+        return $?
+    else
+        # Fallback to netstat if lsof is not available
+        netstat -an | grep $1 > /dev/null
+        return $?
+    fi
+}
+
+# Check if Qdrant is running
 QDRANT_PORT=6333
-
-echo "📋 Using ports: Backend=$BACKEND_PORT, Frontend=$FRONTEND_PORT"
-
-# Activate virtual environment
-echo "📋 Activating virtual environment..."
-if [ -d ".venv" ]; then
-  source .venv/bin/activate
-  echo "✅ Virtual environment activated"
-elif [ -d "venv" ]; then
-  source venv/bin/activate
-  echo "✅ Virtual environment activated"
+if ! is_port_in_use $QDRANT_PORT; then
+    echo -e "${YELLOW}Qdrant is not running on port $QDRANT_PORT.${NC}"
+    echo -e "Starting Qdrant with Docker..."
+    
+    # Check if Docker is available
+    if ! command -v docker > /dev/null; then
+        echo -e "${RED}ERROR: Docker is not installed or not in PATH. Please install Docker to use Qdrant.${NC}"
+        exit 1
+    fi
+    
+    # Start Qdrant with Docker
+    docker run -d -p $QDRANT_PORT:$QDRANT_PORT -v $(pwd)/storage:/qdrant/storage qdrant/qdrant
+    
+    echo -e "${GREEN}Qdrant is now running on port $QDRANT_PORT${NC}"
 else
-  echo "⚠️ No virtual environment found. Creating one..."
-  python -m venv .venv
-  source .venv/bin/activate
-  
-  # Install dependencies
-  echo "📋 Installing dependencies..."
-  pip install -U pip
-  pip install -e .
-  echo "✅ Dependencies installed"
+    echo -e "${GREEN}Qdrant is already running on port $QDRANT_PORT${NC}"
 fi
 
-# Verify Python environment
-echo "📋 Verifying Python environment..."
-python -c "import sys; print(f'Python version: {sys.version}')"
-
-# Kill any existing processes
-echo "📋 Stopping existing processes..."
-pkill -f "python -m flare_ai_rag.main" || true
-pkill -f "npm start" || true
-sleep 2
-
-# Create or update .env file if needed
-if [ ! -f ".env" ]; then
-  if [ -f ".env.example" ]; then
-    echo "⚠️ No .env file found. Creating from .env.example..."
-    cp .env.example .env
-    echo "⚠️ Please edit .env and add your GEMINI_API_KEY"
+# Check if data directory exists
+if [[ ! -d "src/data" ]]; then
+    echo -e "${RED}ERROR: Data directory not found at src/data${NC}"
     exit 1
-  else
-    echo "❌ ERROR: No .env or .env.example found!"
+fi
+
+# Check if docs.csv exists
+if [[ ! -f "src/data/docs.csv" ]]; then
+    echo -e "${RED}ERROR: docs.csv not found in data directory${NC}"
     exit 1
-  fi
 fi
 
-# Check if the .env file has a working API key
-if grep -q "YOUR_API_KEY" .env; then
-  echo "❌ ERROR: You need to update the API key in .env file."
-  echo "   Please visit https://aistudio.google.com/app/apikey to get a new key"
-  echo "   Then update the .env file with your new API key"
-  exit 1
-fi
-
-# Start Qdrant if not running
-echo "📋 Checking if Qdrant is running..."
-if ! docker ps | grep -q qdrant; then
-  echo "🚀 Starting Qdrant container..."
-  docker run -d -p $QDRANT_PORT:6333 qdrant/qdrant
-  sleep 5
-  echo "✅ Qdrant started on port $QDRANT_PORT"
-else
-  echo "✅ Qdrant is already running"
-fi
-
-# Make sure ports are free
-echo "📋 Checking if port $BACKEND_PORT is free..."
-if lsof -i :$BACKEND_PORT > /dev/null 2>&1; then
-  echo "❌ ERROR: Port $BACKEND_PORT is already in use. Please free up this port and try again."
-  exit 1
-fi
-
-echo "📋 Checking if port $FRONTEND_PORT is free..."
-if lsof -i :$FRONTEND_PORT > /dev/null 2>&1; then
-  echo "❌ ERROR: Port $FRONTEND_PORT is already in use. Please free up this port and try again."
-  exit 1
-fi
-
-# Check if data exists and needs to be scraped
-DOCS_PATH="src/data/docs.csv"
-if [ ! -f "$DOCS_PATH" ] || [ ! -s "$DOCS_PATH" ]; then
-  echo "📋 No data found. Running data scraper..."
-  python flare_scraper.py
-  
-  # Check if scraper was successful
-  if [ $? -ne 0 ]; then
-    echo "❌ Data scraper failed."
-    exit 1
-  fi
-fi
-
-# Update frontend config to use the correct port
-echo "📋 Updating frontend configuration..."
-FRONTEND_CONFIG="chat-ui/src/App.js"
-
-if [ -f "$FRONTEND_CONFIG" ]; then
-  # Backup the original App.js
-  cp $FRONTEND_CONFIG ${FRONTEND_CONFIG}.bak
-  
-  # Update the backend URL
-  sed -i.bak "s|const BACKEND_ROUTE = .*;|const BACKEND_ROUTE = \"http://localhost:${BACKEND_PORT}/api/routes/chat/\";|" $FRONTEND_CONFIG
-  echo "✅ Frontend configured to use backend on port $BACKEND_PORT"
-fi
-
-# Start backend
-echo "🚀 Starting backend service on port $BACKEND_PORT..."
-PORT=$BACKEND_PORT python -m flare_ai_rag.main > backend.log 2>&1 &
+# Start the backend
+echo -e "${BLUE}Starting backend server...${NC}"
+chmod +x src/start-backend
+src/start-backend > backend.log 2>&1 &
 BACKEND_PID=$!
-echo "✅ Backend started with PID $BACKEND_PID"
-echo "📋 Backend logs will be saved to backend.log"
+echo -e "${GREEN}Backend started with PID: $BACKEND_PID${NC}"
 
-# Wait for backend to initialize
-echo "⏳ Waiting for backend to initialize..."
-sleep 10
+# Wait for backend to be ready
+echo -e "${BLUE}Waiting for backend to start...${NC}"
+MAX_RETRIES=30
+RETRY_COUNT=0
+BACKEND_URL="http://localhost:8080/api/chat/health"
 
-# Start frontend
-echo "🚀 Starting frontend service on port $FRONTEND_PORT..."
-cd chat-ui && PORT=$FRONTEND_PORT npm start > ../frontend.log 2>&1 &
+while ! curl -s $BACKEND_URL > /dev/null && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    sleep 1
+    RETRY_COUNT=$((RETRY_COUNT+1))
+    echo -n "."
+done
+
+if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+    echo -e "\n${RED}ERROR: Backend failed to start within the expected time.${NC}"
+    echo -e "Please check backend.log for details"
+    kill $BACKEND_PID
+    exit 1
+fi
+
+echo -e "\n${GREEN}✅ Backend started successfully${NC}"
+
+# Start the frontend
+echo -e "${BLUE}Starting frontend server...${NC}"
+cd chat-ui
+npm start > ../frontend.log 2>&1 &
 FRONTEND_PID=$!
-echo "✅ Frontend started with PID $FRONTEND_PID"
-echo "📋 Frontend logs will be saved to frontend.log"
+echo -e "${GREEN}Frontend started with PID: $FRONTEND_PID${NC}"
+
+# Wait for frontend to be ready
+echo -e "${BLUE}Waiting for frontend to start...${NC}"
+RETRY_COUNT=0
+FRONTEND_URL="http://localhost:3000"
+
+while ! curl -s $FRONTEND_URL > /dev/null && [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    sleep 1
+    RETRY_COUNT=$((RETRY_COUNT+1))
+    echo -n "."
+done
+
+if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+    echo -e "\n${RED}ERROR: Frontend failed to start within the expected time.${NC}"
+    echo -e "Please check frontend.log for details"
+    kill $BACKEND_PID
+    kill $FRONTEND_PID
+    exit 1
+fi
+
+echo -e "\n${GREEN}✅ Frontend started successfully${NC}"
 cd ..
 
-# Final instructions
-echo ""
-echo "✅ Application started successfully!"
-echo "📌 Access the frontend at: http://localhost:$FRONTEND_PORT"
-echo "📌 Backend API is running at: http://localhost:$BACKEND_PORT"
-echo ""
-echo "📋 To view backend logs: tail -f backend.log"
-echo "📋 To view frontend logs: tail -f frontend.log"
-echo ""
-echo "🔍 Try asking these questions to test the system:"
-echo "   1. \"What is Flare Network?\""
-echo "   2. \"How do FTSO work?\""
-echo "   3. \"Tell me about Flare's approach to data oracle services\""
-echo ""
-echo "⚠️  If you encounter any issues:"
-echo "   1. Check the logs for errors"
-echo "   2. Ensure your Gemini API key is valid and has quota available"
-echo "   3. Check if Qdrant is running: docker ps | grep qdrant"
-echo "" 
+# Print success message
+echo -e "${GREEN}🚀 Flare AI RAG is running!${NC}"
+echo -e "${BLUE}📊 Backend API: ${NC}http://localhost:8080"
+echo -e "${BLUE}🖥️ Frontend UI: ${NC}http://localhost:3000"
+echo -e "${YELLOW}⌨️  Press Ctrl+C to stop all processes${NC}"
+
+# Function to clean up processes on exit
+cleanup() {
+    echo -e "\n${YELLOW}Stopping services...${NC}"
+    kill $BACKEND_PID 2>/dev/null || true
+    kill $FRONTEND_PID 2>/dev/null || true
+    echo -e "${GREEN}Services stopped${NC}"
+    exit 0
+}
+
+# Register the cleanup function for when the script is interrupted
+trap cleanup SIGINT SIGTERM
+
+# Keep script running to allow easy shutdown with Ctrl+C
+wait 

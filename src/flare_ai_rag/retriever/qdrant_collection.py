@@ -4,8 +4,9 @@ import structlog
 import uuid
 import time
 import random
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, models
 from qdrant_client.http.models import Distance, PointStruct, VectorParams
+from typing import Any
 
 from flare_ai_rag.ai import EmbeddingTaskType, GeminiEmbedding
 from flare_ai_rag.retriever.config import RetrieverConfig
@@ -13,7 +14,8 @@ from flare_ai_rag.utils.text_utils import chunk_text, calculate_text_size
 
 logger = structlog.get_logger(__name__)
 
-MAX_CHUNK_SIZE = 8000  # Reduced from 10kb to ensure we stay under the limit
+# Set to 7500 to be safely under Gemini's 8000 byte limit
+MAX_CHUNK_SIZE = 7500
 
 
 def _create_collection(
@@ -24,54 +26,10 @@ def _create_collection(
     :param collection_name: Name of the collection.
     :param vector_size: Dimension of the vectors.
     """
-    # Check if collection already exists
-    collections = client.get_collections().collections
-    collection_names = [collection.name for collection in collections]
-    
-    if collection_name in collection_names:
-        logger.info(f"Collection {collection_name} already exists, skipping creation.")
-        return
-        
-    # Create new collection if it doesn't exist
     client.recreate_collection(
         collection_name=collection_name,
         vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
     )
-    logger.info(f"Created new collection: {collection_name}")
-
-
-def process_document(content: str, metadata: dict) -> list[dict]:
-    """
-    Process a document by chunking it if necessary and preparing it for embedding.
-    
-    Args:
-        content (str): The document content
-        metadata (dict): Additional metadata for the document
-    
-    Returns:
-        list[dict]: List of processed chunks with metadata
-    """
-    # Check if text needs chunking
-    if calculate_text_size(content) > MAX_CHUNK_SIZE:
-        logger.info(f"Chunking document with size {calculate_text_size(content)} bytes")
-        chunks = chunk_text(content, MAX_CHUNK_SIZE)
-    else:
-        chunks = [content]
-    
-    # Prepare chunks with metadata
-    processed_chunks = []
-    for i, chunk in enumerate(chunks):
-        chunk_data = {
-            "text": chunk,
-            "chunk_index": i,
-            "total_chunks": len(chunks)
-        }
-        # Keep the original metadata but add our chunk info
-        chunk_metadata = metadata.copy()
-        chunk_metadata.update(chunk_data)
-        processed_chunks.append(chunk_metadata)
-    
-    return processed_chunks
 
 
 def generate_collection(
@@ -81,132 +39,284 @@ def generate_collection(
     embedding_client: GeminiEmbedding,
 ) -> None:
     """Routine for generating a Qdrant collection for a specific CSV file type."""
-    # Create collection if it doesn't exist
     _create_collection(
         qdrant_client, retriever_config.collection_name, retriever_config.vector_size
     )
-    
-    # Check if collection already has points
-    collection_info = qdrant_client.get_collection(retriever_config.collection_name)
-    if collection_info.points_count > 0:
-        logger.info(
-            f"Collection {retriever_config.collection_name} already has {collection_info.points_count} points. Skipping embedding generation."
-        )
-        return
-    
     logger.info(
-        "Populating the collection with embeddings.", collection_name=retriever_config.collection_name
+        "Created the collection.", collection_name=retriever_config.collection_name
     )
 
     points = []
-    # Process a larger subset of documents
-    sample_size = min(50, len(df_docs))
-    sample_df = df_docs.sample(n=sample_size)
-    
-    logger.info(f"Processing {sample_size} documents out of {len(df_docs)} to build knowledge base.")
-    
-    for idx, (_, row) in enumerate(sample_df.iterrows(), start=1):
-        content = row.get("content")
+    for idx, (_, row) in enumerate(
+        df_docs.iterrows(), start=1
+    ):  # Using _ for unused variable
+        content = row["content"]
+
         if not isinstance(content, str):
             logger.warning(
                 "Skipping document due to missing or invalid content.",
-                filename=row.get("file_name", "unknown")
+                filename=row["file_name"],
             )
             continue
 
-        # Prepare metadata
-        metadata = {
-            "file_name": row.get("file_name", ""),
-            "meta_data": row.get("meta_data", ""),
-            "last_updated": row.get("last_updated", "")
-        }
-        
-        # Process document into chunks with metadata
-        processed_chunks = process_document(content, metadata)
-        
-        # Generate embeddings and create points for each chunk
-        for chunk_data in processed_chunks:
-            text_content = chunk_data.get("text", "")
-            
-            # Skip empty or oversized chunks
-            if not text_content or calculate_text_size(text_content) > MAX_CHUNK_SIZE:
+        try:
+            embedding = embedding_client.embed_content(
+                embedding_model=retriever_config.embedding_model,
+                task_type=EmbeddingTaskType.RETRIEVAL_DOCUMENT,
+                contents=content,
+                title=str(row["file_name"]),
+            )
+        except google.api_core.exceptions.InvalidArgument as e:
+            # Check if it's the known "Request payload size exceeds the limit" error
+            # If so, downgrade it to a warning
+            if "400 Request payload size exceeds the limit" in str(e):
                 logger.warning(
-                    "Skipping chunk due to invalid size",
-                    size=calculate_text_size(text_content) if text_content else 0,
-                    max_size=MAX_CHUNK_SIZE,
-                    filename=metadata["file_name"]
+                    "Skipping document due to size limit.",
+                    filename=row["file_name"],
                 )
                 continue
-                
-            # Retry logic with exponential backoff
-            max_retries = 5
-            retry_count = 0
-            base_delay = 2  # seconds
-            
-            while retry_count < max_retries:
-                try:
-                    embedding = embedding_client.embed_content(
-                        embedding_model=retriever_config.embedding_model,
-                        contents=text_content,
-                        task_type=EmbeddingTaskType.RETRIEVAL_DOCUMENT,
-                    )
-                    
-                    # Generate a unique integer ID by combining the document index and chunk index
-                    point_id = idx * 1000 + chunk_data.get("chunk_index", 0)
-                    
-                    point = PointStruct(
-                        id=point_id,  # Using numeric ID format
-                        vector=embedding,
-                        payload=chunk_data
-                    )
-                    points.append(point)
-                    
-                    # Add a delay to avoid hitting rate limits (1-2 seconds)
-                    time.sleep(1 + random.random())
-                    
-                    # If successful, break out of the retry loop
-                    break
-                    
-                except google.api_core.exceptions.ResourceExhausted as e:
-                    # Rate limit error, implement exponential backoff
-                    retry_count += 1
-                    if retry_count < max_retries:
-                        delay = base_delay ** retry_count + random.random()
-                        logger.warning(
-                            f"Rate limit exceeded. Retrying in {delay:.2f} seconds. Attempt {retry_count}/{max_retries}",
-                            error=str(e)
-                        )
-                        time.sleep(delay)
-                    else:
-                        logger.error(
-                            f"Failed to generate embedding after {max_retries} attempts. Skipping chunk.",
-                            error=str(e),
-                            filename=metadata["file_name"],
-                            chunk_index=chunk_data.get("chunk_index", 0)
-                        )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to generate embedding.",
-                        error=str(e),
-                        filename=metadata["file_name"],
-                        chunk_index=chunk_data.get("chunk_index", 0)
-                    )
-                    break  # Non-rate limit error, don't retry
+            # Log the full traceback for other InvalidArgument errors
+            logger.exception(
+                "Error encoding document (InvalidArgument).",
+                filename=row["file_name"],
+            )
+            continue
+        except Exception:
+            # Log the full traceback for any other errors
+            logger.exception(
+                "Error encoding document (general).",
+                filename=row["file_name"],
+            )
+            continue
 
-    # Upload points in batches
+        payload = {
+            "filename": row["file_name"],
+            "metadata": row["meta_data"],
+            "text": content,
+        }
+
+        point = PointStruct(
+            id=idx,  # Using integer ID starting from 1
+            vector=embedding,
+            payload=payload,
+        )
+        points.append(point)
+
     if points:
-        batch_size = 100
-        for i in range(0, len(points), batch_size):
-            batch = points[i:i + batch_size]
-            qdrant_client.upsert(
-                collection_name=retriever_config.collection_name,
-                points=batch
-            )
-            logger.info(
-                "Uploaded batch of points",
-                start=i,
-                end=min(i + batch_size, len(points)),
-                total_points=len(points)
-            )
+        qdrant_client.upsert(
+            collection_name=retriever_config.collection_name,
+            points=points,
+        )
+        logger.info(
+            "Collection generated and documents inserted into Qdrant successfully.",
+            collection_name=retriever_config.collection_name,
+            num_points=len(points),
+        )
     else:
         logger.warning("No valid documents found to insert.")
+
+
+class QdrantCollection:
+    """Manages a Qdrant collection for document storage and retrieval."""
+
+    def __init__(
+        self,
+        client: QdrantClient,
+        collection_name: str,
+        vector_size: int,
+        embeddings: GeminiEmbedding,
+    ) -> None:
+        """Initialize QdrantCollection."""
+        self.client = client
+        self.collection_name = collection_name
+        self.vector_size = vector_size
+        self.embeddings = embeddings
+
+    def process_document(self, content: str, metadata: dict) -> list[dict]:
+        """Process a document by chunking it and preparing it for embedding."""
+        # Clean the content
+        content = content.strip()
+        if not content:
+            return []
+            
+        # Check if text needs chunking
+        content_size = calculate_text_size(content)
+        logger.info(f"Processing document: {metadata.get('file_name', 'unknown')} ({content_size} bytes)")
+        
+        # Always chunk the content to ensure consistent processing
+        chunks = chunk_text(content, MAX_CHUNK_SIZE)
+        num_chunks = len(chunks)
+        logger.info(f"Created {num_chunks} chunks for {metadata.get('file_name', 'unknown')}")
+        
+        # Prepare chunks with metadata
+        processed_chunks = []
+        for i, chunk in enumerate(chunks):
+            # Skip empty chunks
+            if not chunk.strip():
+                continue
+                
+            # Calculate chunk size
+            chunk_size = calculate_text_size(chunk)
+            if chunk_size > MAX_CHUNK_SIZE:
+                logger.warning(
+                    f"Chunk {i} in {metadata.get('file_name', 'unknown')} exceeds size limit "
+                    f"({chunk_size} > {MAX_CHUNK_SIZE}), splitting further"
+                )
+                # Try to split the chunk further
+                subchunks = chunk_text(chunk, MAX_CHUNK_SIZE)
+                for j, subchunk in enumerate(subchunks):
+                    subchunk_size = calculate_text_size(subchunk)
+                    if subchunk_size > MAX_CHUNK_SIZE:
+                        logger.error(
+                            f"Subchunk {j} in chunk {i} of {metadata.get('file_name', 'unknown')} "
+                            f"still exceeds limit ({subchunk_size} > {MAX_CHUNK_SIZE}), skipping"
+                        )
+                        continue
+                    
+                    if not subchunk.strip():
+                        continue
+                        
+                    chunk_data = {
+                        "text": subchunk,
+                        "chunk_index": i * 1000 + j,  # Ensure unique index
+                        "total_chunks": len(chunks) * 1000,  # Update total to account for subchunks
+                        "is_subchunk": True,
+                        "parent_chunk": i,
+                        "subchunk_index": j,
+                        "file_name": metadata.get("file_name", ""),
+                        "meta_data": metadata.get("meta_data", {}),
+                        "last_updated": metadata.get("last_updated", "")
+                    }
+                    processed_chunks.append(chunk_data)
+            else:
+                chunk_data = {
+                    "text": chunk,
+                    "chunk_index": i,
+                    "total_chunks": num_chunks,
+                    "is_subchunk": False,
+                    "file_name": metadata.get("file_name", ""),
+                    "meta_data": metadata.get("meta_data", {}),
+                    "last_updated": metadata.get("last_updated", "")
+                }
+                processed_chunks.append(chunk_data)
+        
+        logger.info(
+            f"Processed {metadata.get('file_name', 'unknown')} into {len(processed_chunks)} final chunks"
+        )
+        return processed_chunks
+
+    def generate_collection(
+        self,
+        df: pd.DataFrame,
+        collection_name: str,
+        batch_size: int = 10,
+        max_retries: int = 5,
+        initial_delay: float = 1.0,
+    ) -> None:
+        """Generate a Qdrant collection from a DataFrame of documents."""
+        # Initialize counters
+        total_docs = len(df)
+        successful_docs = 0
+        failed_docs = 0
+        total_chunks = 0
+        failed_chunks = 0
+        
+        logger.info(f"Starting collection generation for {total_docs} documents")
+        
+        # Create collection if it doesn't exist
+        _create_collection(self.client, collection_name, self.vector_size)
+        
+        # Skip if collection already has points
+        collection_info = self.client.get_collection(collection_name)
+        if collection_info.points_count > 0:
+            logger.info(f"Collection {collection_name} already has points, skipping embedding generation")
+            return
+        
+        # Process documents in batches
+        for start_idx in range(0, len(df), batch_size):
+            batch_df = df.iloc[start_idx:start_idx + batch_size]
+            batch_points = []
+            
+            for _, row in batch_df.iterrows():
+                try:
+                    # Skip if content is missing or invalid
+                    if not row.get('content') or not isinstance(row['content'], str):
+                        logger.warning(f"Skipping document {row.get('file_name', 'unknown')}: Invalid or missing content")
+                        failed_docs += 1
+                        continue
+                    
+                    # Process document and get chunks
+                    chunks = self.process_document(row['content'], row.to_dict())
+                    if not chunks:
+                        logger.warning(f"No valid chunks generated for document {row.get('file_name', 'unknown')}")
+                        failed_docs += 1
+                        continue
+                    
+                    # Generate embeddings for each chunk with rate limit handling
+                    for chunk in chunks:
+                        try:
+                            embedding = self.embeddings.embed_content(
+                                content=chunk['text'],
+                                max_retries=max_retries,
+                                initial_delay=initial_delay
+                            )
+                            
+                            # Create point for the chunk
+                            point = PointStruct(
+                                id=str(uuid.uuid4()),
+                                payload={
+                                    'content': chunk['text'],
+                                    'file_name': chunk['file_name'],
+                                    'meta_data': chunk['meta_data'],
+                                    'last_updated': chunk['last_updated'],
+                                    'chunk_index': chunk['chunk_index'],
+                                    'total_chunks': chunk['total_chunks'],
+                                    'is_subchunk': chunk['is_subchunk'],
+                                    'parent_chunk': chunk.get('parent_chunk'),
+                                    'subchunk_index': chunk.get('subchunk_index')
+                                },
+                                vector=embedding
+                            )
+                            batch_points.append(point)
+                            total_chunks += 1
+                            
+                        except Exception as e:
+                            logger.error(f"Failed to generate embedding for chunk: {str(e)}")
+                            failed_chunks += 1
+                            continue
+                    
+                    successful_docs += 1
+                    
+                except Exception as e:
+                    logger.error(f"Failed to process document {row.get('file_name', 'unknown')}: {str(e)}")
+                    failed_docs += 1
+                    continue
+            
+            # Upload batch points if any were generated
+            if batch_points:
+                try:
+                    self.client.upsert(
+                        collection_name=collection_name,
+                        points=batch_points,
+                        wait=True
+                    )
+                    logger.info(f"Uploaded batch of {len(batch_points)} points to collection")
+                except Exception as e:
+                    logger.error(f"Failed to upload batch points: {str(e)}")
+                    failed_chunks += len(batch_points)
+            
+            # Log progress
+            progress = (start_idx + len(batch_df)) / total_docs * 100
+            logger.info(
+                f"Progress: {progress:.1f}% - "
+                f"Processed {successful_docs}/{total_docs} documents "
+                f"({failed_docs} failed) - "
+                f"Generated {total_chunks} chunks ({failed_chunks} failed)"
+            )
+        
+        # Log final statistics
+        logger.info(
+            f"Collection generation complete:\n"
+            f"- Documents: {successful_docs} successful, {failed_docs} failed\n"
+            f"- Chunks: {total_chunks} successful, {failed_chunks} failed"
+        )

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import structlog
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,6 +36,19 @@ class Settings(BaseSettings):
     # Path Settings
     data_path: Path = create_path("data")
     input_path: Path = create_path("flare_ai_rag")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+class InputConfig(BaseSettings):
+    """Configuration for input data and model settings."""
+    gemini_api_key: str = ""
+    router_model: dict[str, Any] = {}
+    retriever_config: dict[str, Any] = {}
+    responder_model: dict[str, Any] = {}
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

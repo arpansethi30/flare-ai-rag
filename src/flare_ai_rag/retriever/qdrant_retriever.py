@@ -58,12 +58,9 @@ class QdrantRetriever(BaseRetriever):
         Perform semantic search by converting the query into a vector
         and searching in Qdrant.
 
-        Args:
-            query (str): The input query
-            top_k (int): Number of top results to return
-        
-        Returns:
-            list[dict]: A list of dictionaries, each representing a retrieved document
+        :param query: The input query.
+        :param top_k: Number of top results to return.
+        :return: A list of dictionaries, each representing a retrieved document.
         """
         # Convert the query into a vector embedding using Gemini
         query_vector = self.embedding_client.embed_content(
@@ -72,25 +69,25 @@ class QdrantRetriever(BaseRetriever):
             task_type=EmbeddingTaskType.RETRIEVAL_QUERY,
         )
 
-        # Search Qdrant for similar vectors
+        # Search Qdrant for similar vectors.
         results = self.client.search(
             collection_name=self.retriever_config.collection_name,
             query_vector=query_vector,
             limit=top_k,
         )
 
-        # Process and return results
+        # Process and return results.
         output = []
         for hit in results:
             if hit.payload:
-                result = {
-                    "text": hit.payload.get("text", ""),
-                    "score": hit.score,
+                text = hit.payload.get("text", "")
+                metadata = {
+                    field: value
+                    for field, value in hit.payload.items()
+                    if field != "text"
                 }
-                # Include any additional metadata from the payload
-                for key, value in hit.payload.items():
-                    if key != "text":
-                        result[key] = value
-                output.append(result)
-        
+            else:
+                text = ""
+                metadata = ""
+            output.append({"text": text, "score": hit.score, "metadata": metadata})
         return output

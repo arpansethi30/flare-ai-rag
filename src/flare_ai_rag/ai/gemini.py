@@ -7,6 +7,9 @@ and message management while maintaining a consistent AI personality.
 """
 
 from typing import Any, override
+import random
+import time
+import logging
 
 from google import genai
 from google.genai import types
@@ -97,9 +100,12 @@ class GeminiProvider(BaseAIProvider):
             ModelResponse: The generated response
         """
         try:
+            # Update prompt to explicitly instruct against templates
+            safe_prompt = prompt + "\n\nIMPORTANT: Do not use template placeholders like {response} or {query} in your answer. Write a direct, fully-formed response instead."
+            
             response = self.client.models.generate_content(
                 model=self.model_name,
-                contents=prompt,
+                contents=safe_prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.7,
                     top_p=0.8,
@@ -107,12 +113,20 @@ class GeminiProvider(BaseAIProvider):
                     max_output_tokens=2048,
                 ),
             )
+            
+            response_text = response.text
+            
+            # Post-process to handle template issues
+            if "{response}" in response_text or "{query}" in response_text:
+                logger.warning("Template placeholders found in response, replacing with error message")
+                response_text = "I don't have enough information to provide a complete answer. Please try asking a more specific question about Flare."
+            
             return ModelResponse(
-                text=response.text,
+                text=response_text,
                 raw_response=response,
                 metadata={
                     "model": self.model_id,
-                    "prompt": prompt,
+                    "prompt": safe_prompt,
                 }
             )
         except Exception as e:
@@ -216,53 +230,79 @@ class GeminiEmbedding:
         self.client = genai.Client(api_key=api_key)
 
     def embed_content(
-        self,
-        embedding_model: str,
-        contents: str,
-        task_type: Any,
-        title: str | None = None,
+        self, 
+        embedding_model: str = "models/text-embedding-004", 
+        contents: str = "", 
+        task_type = None,
+        content: str = None,
+        title: str = None,
+        max_retries: int = 5, 
+        initial_delay: float = 1.0
     ) -> list[float]:
         """
-        Generate embeddings for the given content.
-
+        Generate embeddings for content using Gemini API with rate limit handling.
+        
+        This method supports both the template's parameter style and the original style.
+        
         Args:
-            embedding_model (str): The embedding model to use
-            contents (str): The content to embed
-            task_type (Any): The type of embedding task
-            title (str | None): Optional title for the content
-
+            embedding_model (str): Model to use for embedding
+            contents (str): Content to embed (from template style)
+            task_type: Type of task (document or query embedding)
+            content (str): Content to embed (from original style)
+            title (str): Optional title for the content
+            max_retries (int): Maximum number of retries for rate limit errors
+            initial_delay (float): Initial delay in seconds before retrying
+            
         Returns:
-            list[float]: The generated embedding vector
+            list[float]: Embedding vector
         """
-        # Check content size
-        content_size = calculate_text_size(contents)
-        if content_size > MAX_CONTENT_SIZE:
-            raise ValueError(f"Content size ({content_size} bytes) exceeds maximum allowed size ({MAX_CONTENT_SIZE} bytes)")
+        # Handle different parameter styles
+        final_content = contents
+        if not final_content and content is not None:
+            final_content = content
             
-        try:
-            # Use the model name as provided (with 'models/' prefix)
-            # Gemini embed_content expects the full model path
-            embedding_result = self.client.models.embed_content(
-                model=embedding_model,
-                contents=contents,
-                config=types.EmbedContentConfig(
-                    task_type=str(task_type.name) if hasattr(task_type, 'name') else str(task_type),
-                    title=title,
-                ),
-            )
+        # Add title if provided and we have content
+        if title is not None and final_content:
+            if not final_content.startswith(title):
+                final_content = f"{title}\n\n{final_content}"
             
-            # Get the embedding from the result
-            # Extract the values from the embeddings object
-            if hasattr(embedding_result, 'embeddings') and embedding_result.embeddings:
-                # If embeddings is a list, get the first item's values
-                if embedding_result.embeddings and hasattr(embedding_result.embeddings[0], 'values'):
-                    return embedding_result.embeddings[0].values
-                # If it has a values attribute directly
-                elif hasattr(embedding_result.embeddings, 'values'):
-                    return embedding_result.embeddings.values
+        # Make sure we have content to embed
+        if not final_content:
+            raise ValueError("No content provided for embedding")
             
-            # Fallback
-            raise ValueError("Could not extract embedding values from response")
-        except Exception as e:
-            logger.exception("Error generating embedding", error=str(e))
-            raise
+        # Extract model name (handle both formats)
+        model_name = embedding_model
+        if model_name.startswith("models/"):
+            model_name = model_name.split("/")[1]
+            
+        delay = initial_delay
+        attempt = 0
+        
+        while attempt < max_retries:
+            try:
+                # The correct way to use the Gemini API for embeddings
+                result = self.client.models.embed_content(
+                    model=model_name,
+                    contents=final_content,
+                )
+                return result.embeddings[0].values
+                
+            except genai_errors.ResourceExhaustedError as e:
+                if attempt < max_retries - 1:
+                    # Use exponential backoff with jitter
+                    jitter = random.uniform(0, 0.1 * delay)
+                    sleep_time = delay + jitter
+                    logger.warning(f"Rate limit hit, retrying in {sleep_time:.1f}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(sleep_time)
+                    delay *= 2  # Exponential backoff
+                    attempt += 1
+                else:
+                    # Re-raise after max retries
+                    logger.error(f"Embedding generation failed after {max_retries} attempts: {str(e)}")
+                    raise
+            except Exception as e:
+                # Log other errors and re-raise
+                logger.error(f"Error generating embedding: {str(e)}")
+                raise
+                
+        raise Exception(f"Failed to generate embedding after {max_retries} attempts due to rate limits")
