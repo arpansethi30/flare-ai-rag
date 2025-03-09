@@ -1,0 +1,12 @@
+# Simplified fallback responses dictionary
+FALLBACK_RESPONSES = {
+    "what is flare": "Flare is a blockchain for data, designed to provide decentralized access to high-integrity data from various sources. It's an EVM-compatible smart contract platform optimized for decentralized data acquisition, supporting price and time-series data, blockchain event and state data, and Web2 API data integration. For more information, visit https://dev.flare.network/intro/",
+    
+    "what is ftso": "FTSO (Flare Time Series Oracle) is Flare's native price oracle system that provides reliable, decentralized price data to the network. Key features include decentralized price feeds from multiple independent data providers, economic incentives for accurate data provision, resistance to manipulation through a robust voting system, and support for crypto assets, forex, commodities, and other assets. For more information, visit https://dev.flare.network/tech/ftso/",
+    
+    "tell me about flare": "Flare is the blockchain for data, offering secure, decentralized access to high-integrity data from various sources. As an EVM-compatible platform, it enables developers to build scalable applications with access to cross-chain data through the State Connector, price feeds via the Flare Time Series Oracle (FTSO), time-series data for various assets, and integration with Web2 API data. For more information, visit https://dev.flare.network/intro/",
+    
+    "python": "Flare Network supports Python development primarily through its API integrations and developer tools. While Flare's core smart contracts are written in Solidity (for EVM compatibility), Python is commonly used for building backend services that interact with Flare's blockchain, creating data analysis tools that work with FTSO data, developing scripts for automating interactions with Flare contracts, and implementing off-chain components of dApps that use Flare. For more information, visit https://dev.flare.network/",
+    
+    "setup flare python": "To set up a Python development environment for Flare Network: 1) Install Python 3.8 or higher and pip, 2) Install the web3.py library: `pip install web3`, 3) Configure your environment to connect to Flare's RPC endpoints (Flare mainnet: https://flare-api.flare.network/ext/bc/C/rpc), 4) Set up a wallet with the private keys for your Flare accounts, 5) Create a new Python script and import the necessary libraries. For more detailed setup instructions and examples, visit the official Flare documentation at https://dev.flare.network/"
+} 
